@@ -49,6 +49,9 @@ export function unitInfo(u) {
     uid: u.uid ?? undefined,
     // DESIGN §16: the equipped skill's index (the renderer / audio pick that skill's Spine clip and sound)
     skillIndex: u.side === 'ally' && Number.isInteger(d.skill?.index) ? d.skill.index : undefined,
+    // 干员皮肤 (docs/SKINS.md): the skin the renderer draws this ally with — undefined, not null: JSON.stringify drops
+    // it, so a battle with no skins stays byte-identical (the DESIGN §8.2 wire-format contract test)
+    skin: u.side === 'ally' && typeof u.skin === 'string' ? u.skin : undefined,
     // an ally whose skill is an ammo magazine: the renderer shows it as the segmented bar under the HP bar (b.snap `ammo`) and
     // draws no sustained skill aura for it — known from the unit's first appearance, before any snapshot or skill event
     ammoSkill: u.side === 'ally' && u.skill?.kind === 'ammo' ? true : undefined,

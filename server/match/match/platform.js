@@ -77,6 +77,24 @@ export class MatchPlatform {
     return res;
   }
 
+  /**
+   * room.skins during the match (docs/SKINS.md): replace a player's chosen operator skins. No phase gate — a skin
+   * is cosmetic and public (markPublic: the teammates' views of the pieces follow).
+   * @param {string} playerId
+   * @param {Record<string, string> | null} skins
+   * @returns {{ ok: true } | { error: string, detail?: string }}
+   */
+  setSkins(playerId, skins) {
+    const ps = this.players.get(playerId);
+    if (!ps || ps.isBot || ps.left) return fail(ERR.NOT_IN_ROOM);
+    let res = OK;
+    this.guard(() => {
+      ps.setSkins(skins);
+      this.markPublic();
+    });
+    return res;
+  }
+
   onDisconnect(playerId) {
     const ps = this.players.get(playerId);
     if (!ps || ps.isBot || this.disposed) return;

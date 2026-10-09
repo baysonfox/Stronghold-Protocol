@@ -2,18 +2,21 @@
 // tools/integrate-fusion-assets.mjs — merge the Paper-Yuan fusion asset entries into the upstream manifest.
 //
 // The upstream build (npm run assets) stays the single authority of data/assets.json: every entry it
-// carries — modules, per-unit SFX, enemy run/skills animations, token spineLocal overlays — survives
+// carries — modules, per-unit SFX, enemy run/skills animations, token spineLocal overlays, the audio.voice /
+// audio.voiceJp dub trees (0.2.2: 191 operators each, more complete than the fusion release's 120) — survives
 // untouched. On top of that base this script injects, from the Paper-Yuan v0.2.1-fusion manifest
 // (the release whose public/assets tree is shipped alongside it — its URLs and its files match):
 //
 //   1. chars[charId].skins        271 installed skins / 172 operators (front+back spine, avatar, name)
-//   2. audio.voice.jp / .cn       the full JP + CN battle/settlement voice trees (120 operators each)
-//   3. audio.sfx.units            per-unit SFX banks the upstream plan lacks (the 自选 picks)
-//   4. skills / skillsById        skill icons the upstream plan lacks
+//   2. audio.sfx.units            per-unit SFX banks the upstream plan lacks (the 自选 picks)
+//   3. skills / skillsById        skill icons the upstream plan lacks
 //
-// Idempotent: re-running on an already-merged manifest produces the same output. Entries whose files
-// are missing on disk are reported (and skipped with --strict failing the run), so a manifest that
-// claims a URL the server cannot serve is caught here, not in a player's browser.
+// NOT injected: audio.voice.{jp,cn} — upstream 0.2.2's own voiceJp tree (audio.voiceJp, the voiceLang setting)
+// supersedes the fusion release's bilingual restructure; the fusion files under public/assets/audio/voice/{jp,cn}/
+// are a subset of what `npm run setup` downloads and simply sit alongside the upstream ones (tar -x kept them).
+// Idempotent: re-running on an already-merged manifest produces the same output (entries re-copied, injections
+// skipped). Entries whose files are missing on disk are reported (and skipped with --strict failing the run),
+// so a manifest that claims a URL the server cannot serve is caught here, not in a player's browser.
 //
 // Usage: node tools/integrate-fusion-assets.mjs [--paper <path/to/paper-data-dir>] [--strict] [--dry-run]
 //   --paper   the extracted fusion release `data/` directory (default: /tmp/sp-paper-data/data)
@@ -60,6 +63,13 @@ async function main() {
   const base = await readJson(MANIFEST);
   const paper = await readJson(paperPath);
 
+  // defensive: drop a fusion-structured bilingual tree left by an earlier revision of this script (an
+  // earlier merge wrote audio.voice.{jp,cn}); upstream 0.2.2's audio.voiceJp supersedes it
+  if (base.audio?.voice && (base.audio.voice.jp || base.audio.voice.cn)) {
+    delete base.audio.voice.jp;
+    delete base.audio.voice.cn;
+  }
+
   const report = { skins: 0, skinsChars: 0, voiceJp: 0, voiceCn: 0, sfxUnits: 0, skills: 0, skippedChars: [] };
   const injectedUrls = new Set();
 
@@ -74,17 +84,7 @@ async function main() {
     collectUrls(pRec.skins, injectedUrls);
   }
 
-  // ---- 2. audio.voice.{jp,cn} -----------------------------------------------------------------------
-  const voice = (base.audio = base.audio || {}).voice = base.audio.voice || {};
-  for (const lang of ['jp', 'cn']) {
-    const p = paper.audio?.voice?.[lang];
-    if (!p) continue;
-    voice[lang] = p;
-    report[lang === 'jp' ? 'voiceJp' : 'voiceCn'] = Object.keys(p).length;
-    collectUrls(p, injectedUrls);
-  }
-
-  // ---- 3. audio.sfx.units (paper-only ids) ------------------------------------------------------------
+  // ---- 2. audio.sfx.units (paper-only ids) ------------------------------------------------------------
   const units = (base.audio.sfx = base.audio.sfx || {}).units = base.audio.sfx?.units || {};
   for (const [id, rec] of Object.entries(paper.audio?.sfx?.units || {})) {
     if (units[id]) continue; // upstream's own SFX entry wins
@@ -109,9 +109,7 @@ async function main() {
   base.stats = base.stats || {};
   base.stats.skins = report.skins;
   base.stats.charsWithSkins = report.skinsChars;
-  if (voice.jp || voice.cn) {
-    base.stats.voiceChars = new Set([...Object.keys(voice.jp || {}), ...Object.keys(voice.cn || {})]).size;
-  }
+  base.stats.skills = Object.keys(base.skills || {}).length; // test/assets-diy.test.js cross-checks this
   base.generator = `${base.generator} + tools/integrate-fusion-assets.mjs (fusion ${paper.hash?.slice(0, 8) || '?'})`;
 
   // ---- disk verification --------------------------------------------------------------------------------
@@ -124,7 +122,7 @@ async function main() {
   // ---- write / report -------------------------------------------------------------------------------------
   console.log(`[fusion] skins: ${report.skins} entries on ${report.skinsChars} operators` +
     (report.skippedChars.length ? ` (skipped ${report.skippedChars.length} ids unknown upstream: ${report.skippedChars.slice(0, 5).join(', ')}${report.skippedChars.length > 5 ? '…' : ''})` : ''));
-  console.log(`[fusion] voice: jp ${report.voiceJp} / cn ${report.voiceCn} operators`);
+  console.log(`[fusion] voice: none injected (upstream 0.2.2 voiceJp supersedes the fusion jp/cn trees)`);
   console.log(`[fusion] sfx units +${report.sfxUnits}, skills +${report.skills}`);
   console.log(`[fusion] injected urls: ${injectedUrls.size}, missing on disk: ${missing.length}`);
   for (const m of missing.slice(0, 20)) console.log(`  missing: ${m}`);

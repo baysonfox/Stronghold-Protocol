@@ -159,6 +159,8 @@ export class BattlePlayers {
     const u = this._makeAlly(ps, def, 'op', r, c, { uid: inp.uid, dir });
     u.items = [...(inp.items ?? [])];
     u.carry = inp.carryState ?? null;
+    // 干员皮肤 (docs/SKINS.md): carried for the renderer only (unitInfo `skin`) — a skin never changes a unit's numbers
+    if (typeof inp.skin === 'string' && inp.skin) u.skin = inp.skin;
     // 练度 (自持有, 0.2.2): the owned operator's ×ATK / ×DEF / ×max HP (units.js Πmul) — never a 补位 stand-in's nor a
     // prototype 自选 pick's (another character than the one the player owns)
     if (isCultivate(inp.cultivate) && !def.standInFor && !def.raw?.diyProto) {

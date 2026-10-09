@@ -160,6 +160,24 @@ export class PlayerBasics {
   }
 
   /**
+   * 干员皮肤 (docs/SKINS.md): replace this player's chosen operator skins — a plain `{ [baseChessId]: skinId }` copy
+   * (no chess re-check here: freezeSkins already ran in the lobby; an unknown id simply never matches a piece).
+   * @param {Record<string, string> | null} skins
+   */
+  setSkins(skins) {
+    if (this.isBot) return false;
+    const out = {};
+    if (skins && typeof skins === 'object' && !Array.isArray(skins)) {
+      for (const [id, skinId] of Object.entries(skins)) {
+        if (typeof skinId === 'string' && skinId) out[id] = skinId;
+      }
+    }
+    this.skins = Object.freeze(out);
+    this.dirty();
+    return true;
+  }
+
+  /**
    * Whether this player's piece of chess record (or id) `rec` fights as its stand-in (0.2.0 补位): its base chess is
    * in `standIns` and the data has the stand-in. Normal and elite alike (the elite uses the same backup).
    * @param {object|string|null} rec
