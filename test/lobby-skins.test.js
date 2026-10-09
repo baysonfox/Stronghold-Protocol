@@ -7,6 +7,7 @@ import { describe, test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { startServer } from '../server/index.js';
+import { Match as RealMatch } from '../server/match/Match.js';
 import { StubMatch } from '../server/match/StubMatch.js';
 import { TestClient } from './helpers/wsClient.js';
 import { ERR } from '../shared/constants.js';
@@ -102,5 +103,33 @@ describe('room.skins (lobby, stub match)', () => {
     const bot = inst.opts.seats.find((s) => s.isBot);
     assert.ok(bot, 'a coop room fills its empty seats with bots');
     assert.equal(bot.skins, null, 'a bot wears the default model');
+  });
+});
+
+// The regression this suite guards: a seat carrying skins at the match start crashed the REAL Match —
+// PlayerState's constructor ran setSkins() → dirty() → markPrivate() before Match's own _privDirty existed
+// ("服务器内部错误" on 开始模拟, caught live on the fusion preview container). The stub above never builds
+// a real PlayerState, so this describe uses the real Match.
+describe('room.skins with the real Match (regression: the ctor must not dirty)', () => {
+  let srv;
+  let pool;
+  const cap = quietLog();
+  before(async () => {
+    srv = await startServer({ port: 0, host: '127.0.0.1', log: cap.log, MatchClass: RealMatch, seedFn: () => 20260929 });
+    pool = clientPool(() => `ws://127.0.0.1:${srv.port}/ws`);
+  });
+  after(async () => { await pool?.closeAll(); await srv?.close(); assert.deepEqual(cap.errors, [], 'no server errors logged'); });
+
+  test('开始模拟 with skins on the seat starts the match and exposes them in m.public', async () => {
+    const c = await pool.player('Skin');
+    await ok(c, { t: 'room.skins', skins: { [SKADI]: MARTHE } });
+    await createRoom(c, 'solo');
+    const r = await c.request({ t: 'room.start' });
+    assert.equal(r.t, 'ok', JSON.stringify(r));
+    // the match frames arrive — a failed start never sent them
+    const m = await c.waitFor('m.public', (x) => x.players, 5000);
+    const me = m.players.find((p) => p.playerId === c.id);
+    assert.ok(me, 'the player is in m.public.players');
+    assert.equal(me.skins?.[SKADI], MARTHE, 'the public selection carries the skin');
   });
 });
