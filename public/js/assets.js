@@ -69,7 +69,14 @@ export function avatarUrl(m, id, opts) {
     rec = get(get(m, 'chars'), base);
     if (rec && /_2$/.test(s)) e2 = true;
   }
-  if (rec) return str(e2 && rec.avatarE2) || str(rec.avatar) || null;
+  if (rec) {
+    // 干员皮肤 (docs/SKINS.md): a chosen skin's 180×180 avatar when the manifest carries it
+    if (opts && str(opts.skin)) {
+      const skin = get(get(rec, 'skins'), opts.skin);
+      if (skin && str(skin.avatar)) return str(skin.avatar);
+    }
+    return str(e2 && rec.avatarE2) || str(rec.avatar) || null;
+  }
   return null;
 }
 
@@ -153,8 +160,15 @@ export function spineEntry(m, id, opts) {
   if (!s) return null;
   const ch = get(get(m, 'chars'), s) || get(get(m, 'chars'), baseCharId(s));
   if (ch && isObj(ch.spine)) {
-    const sp = (opts && opts.back && isObj(ch.spine.back)) ? ch.spine.back : ch.spine.front;
-    return validSpine(sp) ? sp : null;
+    const defaultSp = (opts && opts.back && isObj(ch.spine.back)) ? ch.spine.back : ch.spine.front;
+    const fallbackSp = validSpine(defaultSp) ? defaultSp : null;
+    // 干员皮肤 (docs/SKINS.md): the chosen skin's model, falling back to the default one on a load failure
+    const skin = opts && str(opts.skin) ? get(get(ch, 'skins'), opts.skin) : null;
+    if (skin && isObj(skin.spine)) {
+      const sp = (opts && opts.back && isObj(skin.spine.back)) ? skin.spine.back : skin.spine.front;
+      if (validSpine(sp)) return fallbackSp ? { ...sp, fallback: fallbackSp } : sp;
+    }
+    return fallbackSp;
   }
   const tk = get(get(m, 'tokens'), s);
   if (tk) {
@@ -199,9 +213,12 @@ export function localSpineEntry(sl, local, web) {
   return entry;
 }
 
-/** Whether an operator/token/enemy has a Back model. */
-export function hasBackSpine(m, id) {
+/** Whether an operator/token/enemy has a Back model. `skinId` asks about an installed skin (docs/SKINS.md). */
+export function hasBackSpine(m, id, skinId) {
   const ch = get(get(m, 'chars'), str(id) || '') || get(get(m, 'chars'), baseCharId(id) || '');
+  if (!ch) return false;
+  const skin = str(skinId) ? get(get(ch, 'skins'), skinId) : null;
+  if (skin && isObj(skin.spine)) return !!validSpine(skin.spine.back);
   return !!(ch && isObj(ch.spine) && validSpine(ch.spine.back));
 }
 

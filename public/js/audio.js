@@ -677,6 +677,26 @@ export class AudioManager {
     } catch { /* ignore */ }
   }
 
+  /**
+   * 干员皮肤 edition (docs/SKINS.md fusion): temporarily duck the BGM so a voice line pops — ~35 % volume for
+   * `durationMs`, then a smooth restore. Best-effort: no-op without a context / BGM gain.
+   */
+  duckBgm(durationMs = 1800) {
+    if (!this.ctx || !this.bgmGain) return;
+    try {
+      const t = this.ctx.currentTime;
+      const normal = this.volumes.bgm ** 2 * 0.55;
+      this.bgmGain.gain.setTargetAtTime(normal * 0.35, t, 0.08);
+      clearTimeout(this._duckTimer);
+      this._duckTimer = setTimeout(() => {
+        if (this.ctx && this.bgmGain) {
+          const t2 = this.ctx.currentTime;
+          this.bgmGain.gain.setTargetAtTime(this.volumes.bgm ** 2 * 0.55, t2, 0.3);
+        }
+      }, durationMs);
+    } catch { /* ignore */ }
+  }
+
   /** Fetch + decode (cached, LRU). Resolves null on failure. */
   _buffer(url) {
     if (!this.ctx || typeof url !== 'string' || !url) return Promise.resolve(null);
@@ -963,6 +983,7 @@ export class AudioManager {
         setTimeout(end, (buf.duration + 0.3) * 1000); // safety if onended never fires
         src.start();
         this.voiceNode = node;
+        this.duckBgm(1800); // the line pops over the music, then the BGM restores
       } catch (err) {
         this._warn('voice-play', err);
         if (token === this.voiceToken) this.voiceGate.release();

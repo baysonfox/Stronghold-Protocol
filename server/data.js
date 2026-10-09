@@ -26,7 +26,7 @@ export const DATA_DIR = path.join(ROOT, 'data');
 /** Files the game expects (a warning lists the missing ones). */
 export const DATA_FILES = Object.freeze([
   'config', 'chess', 'bonds', 'garrisons', 'items', 'bands', 'effects', 'choices',
-  'enemies', 'factions', 'waves', 'stages', 'bosses', 'tokens', 'assets', 'backups',
+  'enemies', 'factions', 'waves', 'stages', 'bosses', 'tokens', 'assets', 'backups', 'skins',
 ]);
 
 /**
