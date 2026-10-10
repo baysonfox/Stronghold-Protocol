@@ -2,6 +2,7 @@
 // title → name → create room → open 干员调配 → pick Skadi → the skin section lists her skins →
 // choose one → the room.skins frame reached the server (the page's net layer stays online).
 // Run with the dev server up: PORT=3100 node scripts/smoke-skins.mjs
+/* global document */ // the page.evaluate callbacks run in the browser
 import puppeteer from 'puppeteer-core';
 
 const BASE = process.env.BASE || 'http://127.0.0.1:3100';
