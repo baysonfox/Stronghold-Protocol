@@ -17,6 +17,7 @@ let port = Number(process.env.PORT) || 3000;
 let token = process.env.ADMIN_TOKEN || process.env.SP_ADMIN_KEY || null;
 let mode = 'status';
 let inMinutes = null;
+let deadline = null;
 let msg = null;
 
 for (let i = 0; i < args.length; i++) {
@@ -24,6 +25,16 @@ for (let i = 0; i < args.length; i++) {
   if (a === '--status' || a === '-s') { mode = 'status'; }
   else if (a === '--cancel' || a === '-c') { mode = 'cancel'; }
   else if (a === '--in' || a === '-m') { mode = 'set'; inMinutes = Number(args[++i]); }
+  else if (a === '--at') {
+    mode = 'set';
+    const timeStr = args[++i];
+    const [hh, mm] = timeStr.split(':').map(Number);
+    const d = new Date();
+    d.setHours(hh, mm, 0, 0);
+    if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1);
+    deadline = d.getTime();
+  }
+  else if (a === '--deadline') { mode = 'set'; deadline = Number(args[++i]); }
   else if (a === '--msg') { msg = args[++i]; }
   else if (a === '--host') { host = args[++i]; }
   else if (a === '--port') { port = Number(args[++i]); }
@@ -32,6 +43,7 @@ for (let i = 0; i < args.length; i++) {
     console.log(`用法: node tools/maintenance.mjs [options]
   --status, -s              查看当前维护状态
   --in <分钟>, -m <分钟>     设定在 N 分钟后停服维护 (如: --in 30)
+  --at <HH:MM>              设定在指定时刻停服维护 (如: --at 01:57)
   --msg <文本>              公告附加信息
   --cancel, -c              取消维护计划
   --host <host>             服务器地址 (默认 127.0.0.1)
@@ -80,11 +92,12 @@ async function run() {
   } else if (mode === 'cancel') {
     res = await request({ path: '/admin/maintenance', method: 'POST', body: { cancel: true } });
   } else if (mode === 'set') {
-    if (!inMinutes || Number.isNaN(inMinutes) || inMinutes <= 0) {
-      console.error('错误: 请指定有效的时间，如 --in 30');
+    if (!deadline && (!inMinutes || Number.isNaN(inMinutes) || inMinutes <= 0)) {
+      console.error('错误: 请指定有效的时间，如 --in 30 或 --at 01:57');
       process.exit(1);
     }
-    res = await request({ path: '/admin/maintenance', method: 'POST', body: { inMinutes, message: msg } });
+    const body = deadline ? { deadline, message: msg } : { inMinutes, message: msg };
+    res = await request({ path: '/admin/maintenance', method: 'POST', body });
   }
 
   if (res.status === 401 || res.status === 403) {
