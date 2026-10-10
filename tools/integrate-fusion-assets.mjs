@@ -3,7 +3,7 @@
 //
 // The upstream build (npm run assets) stays the single authority of data/assets.json: every entry it
 // carries — modules, per-unit SFX, enemy run/skills animations, token spineLocal overlays, the audio.voice /
-// audio.voiceJp dub trees (0.2.2: 191 operators each, more complete than the fusion release's 120) — survives
+// audio.voiceJp dub trees (0.2.3: 192 operators each, more complete than the fusion release's 120) — survives
 // untouched. On top of that base this script injects, from the Paper-Yuan v0.2.1-fusion manifest
 // (the release whose public/assets tree is shipped alongside it — its URLs and its files match):
 //
@@ -11,7 +11,7 @@
 //   2. audio.sfx.units            per-unit SFX banks the upstream plan lacks (the 自选 picks)
 //   3. skills / skillsById        skill icons the upstream plan lacks
 //
-// NOT injected: audio.voice.{jp,cn} — upstream 0.2.2's own voiceJp tree (audio.voiceJp, the voiceLang setting)
+// NOT injected: audio.voice.{jp,cn} — upstream 0.2.3's own voiceJp tree (audio.voiceJp, the voiceLang setting)
 // supersedes the fusion release's bilingual restructure; the fusion files under public/assets/audio/voice/{jp,cn}/
 // are a subset of what `npm run setup` downloads and simply sit alongside the upstream ones (tar -x kept them).
 // Idempotent: re-running on an already-merged manifest produces the same output (entries re-copied, injections
@@ -64,7 +64,7 @@ async function main() {
   const paper = await readJson(paperPath);
 
   // defensive: drop a fusion-structured bilingual tree left by an earlier revision of this script (an
-  // earlier merge wrote audio.voice.{jp,cn}); upstream 0.2.2's audio.voiceJp supersedes it
+  // earlier merge wrote audio.voice.{jp,cn}); upstream 0.2.3's audio.voiceJp supersedes it
   if (base.audio?.voice && (base.audio.voice.jp || base.audio.voice.cn)) {
     delete base.audio.voice.jp;
     delete base.audio.voice.cn;
@@ -122,7 +122,7 @@ async function main() {
   // ---- write / report -------------------------------------------------------------------------------------
   console.log(`[fusion] skins: ${report.skins} entries on ${report.skinsChars} operators` +
     (report.skippedChars.length ? ` (skipped ${report.skippedChars.length} ids unknown upstream: ${report.skippedChars.slice(0, 5).join(', ')}${report.skippedChars.length > 5 ? '…' : ''})` : ''));
-  console.log(`[fusion] voice: none injected (upstream 0.2.2 voiceJp supersedes the fusion jp/cn trees)`);
+  console.log(`[fusion] voice: none injected (upstream 0.2.3 voiceJp supersedes the fusion jp/cn trees)`);
   console.log(`[fusion] sfx units +${report.sfxUnits}, skills +${report.skills}`);
   console.log(`[fusion] injected urls: ${injectedUrls.size}, missing on disk: ${missing.length}`);
   for (const m of missing.slice(0, 20)) console.log(`  missing: ${m}`);

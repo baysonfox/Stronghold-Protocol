@@ -56,7 +56,7 @@ Bots always wear the default model (`seats[].skins` is null for them).
 
 ## Voices are NOT part of this
 
-Upstream 0.2.2 carries its own, more complete dub trees (`audio.voice` / `audio.voiceJp`, 191 operators
+Upstream 0.2.3 carries its own, more complete dub trees (`audio.voice` / `audio.voiceJp`, 192 operators
 each, the 语音语言 setting in `public/js/ui/settings.js`). The fusion release's bilingual restructure
 (`audio.voice.{jp,cn}`) is **not** integrated; only its BGM ducking is (`audio.js duckBgm`: a voice line
 plays over ~35 % BGM for 1.8 s, then a smooth restore).
