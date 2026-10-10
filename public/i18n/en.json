@@ -1212,5 +1212,10 @@
   "请等待所有玩家连接后再发起投票": "Wait for all players to connect before starting a vote.",
   "同意重刷": "Agree to reroll",
   "拒绝重刷": "Reject reroll",
-  "取消投票": "Cancel vote"
+  "取消投票": "Cancel vote",
+  "服务器即将维护，已停止创建房间": "Server maintenance is imminent; creating rooms is disabled",
+  "维护倒计时中，已停止开启新对局": "Maintenance countdown in progress; starting new matches is disabled",
+  "服务器将于 {time} 进行停服维护（剩余 {remain}），已停止创建房间与开局，请局内玩家尽快完成！": "Server maintenance scheduled at {time} ({remain} remaining); new rooms and matches are disabled, please finish ongoing matches!",
+  "服务器将于 {time} 进行停服维护（剩余 {remain}），请合理安排对局时间": "Server maintenance scheduled at {time} ({remain} remaining); please plan your matches accordingly",
+  "服务器即将维护更新，已停止创建房间与开启新对局": "Server maintenance is imminent; creating rooms and starting matches are disabled"
 }

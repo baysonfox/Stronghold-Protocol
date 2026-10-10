@@ -257,6 +257,8 @@ export function LobbyScreen() {
   useEffect(() => () => { alive.current = false; }, []);
 
   const online = conn.status === 'online';
+  const notice = useStore((s) => s.notice);
+  const inCutoff = !!(notice && notice.active && notice.inCutoff);
   const codeOk = CODE_RE.test(code);
 
   const pickMode = (m) => { setRoomMode(m); savePref('lobby.mode', m); };
@@ -272,7 +274,10 @@ export function LobbyScreen() {
       if (alive.current) setBusy(null);
     }
   };
-  const create = () => run('create', () => net.request('room.create', { mode: roomMode, difficulty }));
+  const create = () => {
+    if (inCutoff) { toast(t('服务器即将维护，已停止创建房间'), 'warn'); return; }
+    run('create', () => net.request('room.create', { mode: roomMode, difficulty }));
+  };
   const join = (c = code) => {
     // `onClick=${join}` hands the click EVENT as the first argument, and a default parameter only applies to
     // `undefined` — codeArg keeps an event target out of the key and falls back to the input field
@@ -364,15 +369,17 @@ export function LobbyScreen() {
           ${DIFFICULTIES.map((d) => html`<${DifficultyCard} key=${d} roomMode=${roomMode} difficulty=${d} selected=${difficulty === d} onSelect=${pickDifficulty} />`)}
         </div>
         <div class="create-box">
-          <${Tooltip} block=${true} text=${online ? null : t('正在连接服务器…')}>
-            <${Button} variant="primary" size="xl" block=${true} iconRight="chevrons" loading=${busy === 'create'} disabled=${!online} onClick=${create}>
+          <${Tooltip} block=${true} text=${!online ? t('正在连接服务器…') : (inCutoff ? t('服务器即将维护，已停止创建房间') : null)}>
+            <${Button} variant="primary" size="xl" block=${true} iconRight="chevrons" loading=${busy === 'create'} disabled=${!online || inCutoff} onClick=${create}>
               ${roomMode === 'solo' ? t('开始独立模拟') : t('创建同盟')}
             <//>
           <//>
           <div class="create-box__hint">
-            ${online
-              ? html`<span>${roomMode === 'solo' ? t('创建后即可开始模拟') : t('创建后可邀请好友或添加 AI 队友')}</span>`
-              : html`<${Spinner} size="sm" label="CONNECTING" />`}
+            ${inCutoff
+              ? html`<span class="t-warn">${t('服务器即将维护，已停止创建房间')}</span>`
+              : (online
+                ? html`<span>${roomMode === 'solo' ? t('创建后即可开始模拟') : t('创建后可邀请好友或添加 AI 队友')}</span>`
+                : html`<${Spinner} size="sm" label="CONNECTING" />`)}
           </div>
         </div>
       </section>

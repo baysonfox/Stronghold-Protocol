@@ -47,6 +47,28 @@ export function splitUrl(url) {
   return q >= 0 ? { rawPath: hashless(u.slice(0, q)), query: hashless(u.slice(q + 1)) } : { rawPath: hashless(u), query: '' };
 }
 
+/** Read and parse a JSON request body (up to maxBytes). */
+export async function readJsonBody(req, maxBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > maxBytes) { req.destroy(); reject(new Error('Payload Too Large')); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (!chunks.length) { resolve({}); return; }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      } catch (err) {
+        reject(err);
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
 /** node:http 'clientError' listener: a reset socket is dropped, any other unparseable request gets a bare 400. */
 export function answerClientError(err, socket) {
   if (err && err.code === 'ECONNRESET') { socket.destroy(); return; }

@@ -288,6 +288,12 @@ export class Lobby {
     this.resyncTimers = new Map();
     /** per-network limit warnings: at most one log line per 10 s (the rest are counted) */
     this.limitLog = { at: -Infinity, suppressed: 0 };
+    /** Maintenance schedule: { active: boolean, deadline: number|null, message: string|null, cutoffMs: number } */
+    this.maintenance = { active: false, deadline: null, message: null, cutoffMs: 10 * 60 * 1000 };
+    /** @type {NodeJS.Timeout | null} */
+    this.maintenanceTimer = null;
+    /** @type {Set<number>} sent in-match ticker milestones (minutes) */
+    this.sentTickerMilestones = new Set();
   }
 
   /** @param {string} code @returns {Room | null} */
@@ -404,11 +410,158 @@ export class Lobby {
     if (room) this.removeMember(room, session.playerId);
   }
 
+  // ---------------------------------------------------------------------------------------------------
+  // Maintenance mode & Announcements
+  // ---------------------------------------------------------------------------------------------------
+
+  /**
+   * Schedule or update server maintenance.
+   * @param {{ inMinutes?: number, inSec?: number, deadline?: number, message?: string }} [opts]
+   */
+  setMaintenance({ inMinutes, inSec, deadline, message } = {}) {
+    let dl = deadline;
+    if (dl == null) {
+      if (typeof inMinutes === 'number' && Number.isFinite(inMinutes) && inMinutes > 0) {
+        dl = this.now() + Math.round(inMinutes * 60 * 1000);
+      } else if (typeof inSec === 'number' && Number.isFinite(inSec) && inSec > 0) {
+        dl = this.now() + Math.round(inSec * 1000);
+      } else {
+        dl = this.now() + 30 * 60 * 1000;
+      }
+    }
+    const msg = typeof message === 'string' && message.trim() ? message.trim().slice(0, 300) : null;
+    this.maintenance = {
+      active: true,
+      deadline: dl,
+      message: msg,
+      cutoffMs: 10 * 60 * 1000,
+    };
+    this.sentTickerMilestones.clear();
+
+    this.broadcastNotice();
+    this.broadcastMaintenanceTicker(true);
+    this.startMaintenanceLoop();
+    this.log.info(`[lobby] maintenance scheduled for ${new Date(dl).toISOString()} (${Math.round((dl - this.now()) / 60000)}m remaining)`);
+    return this.maintenanceStatus();
+  }
+
+  /** Cancel scheduled maintenance. */
+  cancelMaintenance() {
+    if (!this.maintenance.active) return this.maintenanceStatus();
+    this.maintenance = { active: false, deadline: null, message: null, cutoffMs: 10 * 60 * 1000 };
+    if (this.maintenanceTimer) { clearInterval(this.maintenanceTimer); this.maintenanceTimer = null; }
+    this.sentTickerMilestones.clear();
+    this.broadcastNotice();
+    this.broadcastMatchTicker('[系统维护] 原定服务器维护已取消。');
+    this.log.info('[lobby] maintenance cancelled');
+    return this.maintenanceStatus();
+  }
+
+  /** Current maintenance status object for HTTP / healthz / WebSocket frames. */
+  maintenanceStatus() {
+    if (!this.maintenance.active || this.maintenance.deadline == null) {
+      return { active: false, deadline: null, remainingSec: 0, inCutoff: false, cutoffSec: 600, message: null };
+    }
+    const remSec = Math.max(0, Math.round((this.maintenance.deadline - this.now()) / 1000));
+    return {
+      active: true,
+      deadline: this.maintenance.deadline,
+      remainingSec: remSec,
+      inCutoff: this.isInMaintenanceCutoff(),
+      cutoffSec: Math.round(this.maintenance.cutoffMs / 1000),
+      message: this.maintenance.message || null,
+    };
+  }
+
+  /** Whether the server is in the final cutoff period (e.g. last 10 minutes) before restart. */
+  isInMaintenanceCutoff() {
+    if (!this.maintenance.active || this.maintenance.deadline == null) return false;
+    return this.now() >= (this.maintenance.deadline - this.maintenance.cutoffMs);
+  }
+
+  /** Broadcast current notice state to every connected session. */
+  broadcastNotice() {
+    const frame = JSON.stringify({ t: 'notice', notice: this.maintenanceStatus() });
+    for (const s of this.registry.all()) {
+      if (s.connected && s.ws) {
+        try { s.ws.send(frame, () => {}); } catch {}
+      }
+    }
+  }
+
+  /** Start interval timer that tracks remaining time and broadcasts tickers at key milestones. */
+  startMaintenanceLoop() {
+    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+    this.maintenanceTimer = setInterval(() => {
+      if (!this.maintenance.active || this.maintenance.deadline == null) {
+        clearInterval(this.maintenanceTimer);
+        this.maintenanceTimer = null;
+        return;
+      }
+      const remMs = this.maintenance.deadline - this.now();
+      if (remMs <= 0) {
+        clearInterval(this.maintenanceTimer);
+        this.maintenanceTimer = null;
+        return;
+      }
+      const remMin = Math.ceil(remMs / 60000);
+      const milestones = [60, 45, 30, 20, 15, 10, 5, 3, 2, 1];
+      if (milestones.includes(remMin) && !this.sentTickerMilestones.has(remMin)) {
+        this.sentTickerMilestones.add(remMin);
+        this.broadcastMaintenanceTicker(false, remMin);
+        this.broadcastNotice();
+      }
+    }, 15000);
+    if (typeof this.maintenanceTimer.unref === 'function') this.maintenanceTimer.unref();
+  }
+
+  /**
+   * Broadcast maintenance announcement ticker to every running match.
+   * @param {boolean} [immediate]
+   * @param {number} [knownMin]
+   */
+  broadcastMaintenanceTicker(immediate = false, knownMin = null) {
+    if (!this.maintenance.active || this.maintenance.deadline == null) return;
+    const remMin = knownMin ?? Math.max(1, Math.ceil((this.maintenance.deadline - this.now()) / 60000));
+    const inCutoff = this.isInMaintenanceCutoff();
+    let text;
+    if (inCutoff) {
+      text = `[系统维护] 服务器将于 ${remMin} 分钟后重启，已停止新开对局，请尽快完成！`;
+    } else {
+      text = `[系统维护] 服务器将于 ${remMin} 分钟后重启维护，请合理安排对局时间。`;
+    }
+    if (this.maintenance.message) {
+      text += ` (${this.maintenance.message})`;
+    }
+    this.broadcastMatchTicker(text);
+  }
+
+  /**
+   * Send a custom high-priority ticker line to all active matches.
+   * @param {string} text
+   */
+  broadcastMatchTicker(text) {
+    const msg = {
+      t: 'm.ticker',
+      text: String(text).slice(0, 250),
+      id: null,
+      type: 'CUSTOM',
+      priority: 100, // top priority
+      playerId: null,
+    };
+    for (const r of this.rooms.values()) {
+      if (r.match && r.matchCtx?.live) {
+        this.matchBroadcast(r, r.matchCtx, msg);
+      }
+    }
+  }
+
   /**
    * Dispose every room (notifying members with room.closed) — used on server shutdown.
    * @param {string} [reason]
    */
   shutdown(reason = 'shutdown') {
+    if (this.maintenanceTimer) { clearInterval(this.maintenanceTimer); this.maintenanceTimer = null; }
     for (const room of [...this.rooms.values()]) this.disposeRoom(room, reason);
     for (const t of this.graceTimers.values()) clearTimeout(t);
     this.graceTimers.clear();
@@ -421,6 +574,7 @@ export class Lobby {
   // ---------------------------------------------------------------------------------------------------
 
   create(session, { mode, difficulty }) {
+    if (this.isInMaintenanceCutoff()) return fail(ERR.MAINTENANCE, 'server entering maintenance; creating rooms is disabled');
     const cur = this.roomOf(session);
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
     if (this.rooms.size >= this.opts.maxRooms) return fail(ERR.INTERNAL, 'too many rooms');
@@ -623,6 +777,7 @@ export class Lobby {
   }
 
   start(session) {
+    if (this.isInMaintenanceCutoff()) return fail(ERR.MAINTENANCE, 'server entering maintenance; starting matches is disabled');
     const room = this.roomOf(session);
     if (!room) return fail(ERR.NOT_IN_ROOM);
     if (room.hostId !== session.playerId) return fail(ERR.NOT_HOST);
@@ -753,7 +908,7 @@ export class Lobby {
 
   /** Extra fields of every `welcome` (net.js): the operators a 自选 slot may field (shared/diy.js `kitted`). */
   welcomeInfo() {
-    return { diyKitted: KITTED_CHARS };
+    return { diyKitted: KITTED_CHARS, notice: this.maintenanceStatus() };
   }
 
   // ---------------------------------------------------------------------------------------------------

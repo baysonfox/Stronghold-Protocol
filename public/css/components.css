@@ -992,6 +992,71 @@
 .conn-banner .icon { width: .22rem; height: .22rem; color: var(--orange-hi); }
 .conn-banner__sub { color: var(--text-lo); font-family: var(--font-num); font-size: calc(.15 * var(--t)); }
 
+/* ---- notice banner (ui/noticeBanner.js) ------------------------------------------------------------- */
+.notice-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: .32rem;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 .2rem;
+  background: rgba(36, 18, 8, .94);
+  border-bottom: 1px solid rgba(245, 158, 11, .55);
+  box-shadow: 0 .04rem .15rem rgba(0, 0, 0, .5);
+  color: var(--text-hi);
+  font-size: calc(.14 * var(--t));
+  overflow: hidden;
+  pointer-events: auto;
+}
+.notice-banner--cutoff {
+  background: rgba(55, 12, 12, .96);
+  border-bottom: 1px solid rgba(239, 68, 68, .8);
+  box-shadow: 0 .04rem .2rem rgba(239, 68, 68, .25);
+}
+.notice-banner__track {
+  display: flex;
+  align-items: center;
+  gap: .1rem;
+  white-space: nowrap;
+}
+.notice-banner .icon {
+  width: .18rem;
+  height: .18rem;
+  flex: none;
+  color: var(--orange-hi);
+}
+.notice-banner--cutoff .icon {
+  color: var(--red-premium);
+  animation: blink 1s steps(2) infinite;
+}
+.notice-banner__text {
+  font-weight: 500;
+  letter-spacing: .02em;
+}
+.sp-in-match .notice-banner__track {
+  animation: notice-marquee 24s linear infinite;
+}
+.sp-in-match .notice-banner__track:hover {
+  animation-play-state: paused;
+}
+@keyframes notice-marquee {
+  0% { transform: translateX(60%); }
+  100% { transform: translateX(-100%); }
+}
+
+.sp-notice .topbar { margin-top: .32rem; }
+.sp-notice .screen.lobby { padding-top: .32rem; }
+.sp-notice .screen.room-screen { padding-top: .32rem; }
+.sp-notice.sp-in-match .gtop { top: .32rem; }
+.sp-notice.sp-in-match .ticker { top: calc(1.0rem + .32rem); }
+.sp-notice.sp-in-match .conn-banner { top: calc(1.34rem + var(--sa-t, 0px) + .32rem); }
+.sp-notice.sp-in-match .toast-host { top: calc(1.34rem + var(--sa-t, 0px) + .32rem); }
+.sp-notice.sp-in-match.sp-conn .toast-host { top: calc(2.0rem + var(--sa-t, 0px) + .32rem); }
+
 /* ---- misc shared bits ------------------------------------------------------------------------------ */
 .kv { display: flex; align-items: baseline; gap: .08rem; }
 .kv__k { color: var(--text-lo); font-size: calc(.14 * var(--t)); }

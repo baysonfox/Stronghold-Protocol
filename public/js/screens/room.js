@@ -231,6 +231,8 @@ export function RoomScreen() {
 
   if (!room) return null;
   const online = conn.status === 'online';
+  const notice = useStore((s) => s.notice);
+  const inCutoff = !!(notice && notice.active && notice.inCutoff);
   const coop = room.mode !== 'solo';
   const facts = roomFacts(room, me.playerId);
   const myReady = !!facts.mine?.ready;
@@ -248,7 +250,10 @@ export function RoomScreen() {
   };
 
   const toggleReady = () => run('ready', () => net.request('room.ready', { ready: !myReady }));
-  const start = () => run('start', () => net.request('room.start', {}));
+  const start = () => {
+    if (inCutoff) { toast(t('维护倒计时中，已停止开启新对局'), 'warn'); return; }
+    run('start', () => net.request('room.start', {}));
+  };
   const addBot = () => run('add', () => net.request('room.addBot', {}));
   const removeBot = (seat) => run(`rm${seat}`, () => net.request('room.removeBot', { seat }));
   // the host removes a human before the match (community report #17): asked first; the player may join again. The
@@ -286,6 +291,8 @@ export function RoomScreen() {
 
   const statusLine = !online
     ? html`<span class="t-orange"><${Icon} name="wifiOff" />${t('连接中断，正在重连…')}</span>`
+    : inCutoff
+      ? html`<span class="t-warn">${t('维护倒计时中，已停止开启新对局')}</span>`
     : facts.spectating
       ? html`<span class="t-lo"><${Icon} name="eye" />${t('观战中 · 不占博士席位，模拟开始后可切换观看各位博士')}</span>`
     : !coop
@@ -358,8 +365,8 @@ export function RoomScreen() {
       <div class="room-bar__right">
         <${LoadoutButton} from="room" size="lg" class="room-loadout" label=${t('干员调配')} />
         ${facts.isHost
-          ? html`<${Tooltip} text=${facts.canStart ? null : t('仍有博士未准备就绪')}>
-              <${Button} variant="primary" size="xl" icon="play" loading=${busy === 'start'} disabled=${!facts.canStart || !online} onClick=${start}>${t('开始模拟')}<//>
+          ? html`<${Tooltip} text=${inCutoff ? t('维护倒计时中，已停止开启新对局') : (facts.canStart ? null : t('仍有博士未准备就绪'))}>
+              <${Button} variant="primary" size="xl" icon="play" loading=${busy === 'start'} disabled=${!facts.canStart || !online || inCutoff} onClick=${start}>${t('开始模拟')}<//>
             <//>`
           : facts.spectating
             ? html`<${Button} variant="secondary" size="xl" icon="eye" disabled=${true}>${t('观战中')}<//>`

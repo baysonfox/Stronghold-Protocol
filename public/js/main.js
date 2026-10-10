@@ -35,6 +35,7 @@ import { render } from '../vendor/preact.module.js';
 import { useErrorBoundary } from '../vendor/hooks.module.js';
 import { html, UiHosts, Button, MicroLabel, closeAllDialogs } from './ui/components.js';
 import { ConnectionBanner } from './ui/connBanner.js';
+import { NoticeBanner } from './ui/noticeBanner.js';
 import { ToastHost, toast, toastError, describeError } from './ui/toasts.js';
 import { net, identity, NetError } from './net.js';
 import { store, useStore, emptyMatch, selectRoute, sessionResetNotice, isSpectating } from './store.js';
@@ -154,6 +155,7 @@ function onWelcome(msg) {
   identity.saveName(name);
   store.set({ me: { playerId: msg.playerId ?? null, name, token: typeof msg.token === 'string' ? msg.token : null } });
   welcomeAt = Date.now();
+  if (msg.notice !== undefined) store.set({ notice: msg.notice || null });
 
   if (prevId != null && prevId !== msg.playerId) {
     // A brand-new server session (the server restarted — crashed / killed, so no room.closed arrived — or this session
@@ -215,6 +217,7 @@ function wireNet() {
     });
   });
   net.on('clock', (c) => store.set({ clock: { offset: c.offset, rtt: c.rtt, synced: c.synced } }));
+  net.on('notice', (msg) => store.set({ notice: msg.notice || null }));
   net.on('welcome', onWelcome);
   net.on('helloError', (err) => {
     if (err.code === 'SESSION_IN_USE') identity.rejectToken();
@@ -300,6 +303,7 @@ function App() {
   return html`<div class="app-root">
     <div class="app-bg" aria-hidden="true"></div>
     ${error ? html`<${ScreenCrashed} error=${error} reset=${resetError} />` : html`<${Screen} key=${route} />`}
+    <${NoticeBanner} />
     <${ConnectionBanner} />
     <${ToastHost} />
     <${UiHosts} />

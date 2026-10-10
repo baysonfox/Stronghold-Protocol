@@ -10,9 +10,20 @@
 
 import { PROTOCOL_VERSION, APP_VERSION } from '../../shared/constants.js';
 import { buildTag } from './buildTag.js';
-import { setSecurityHeaders, sendError, sendJson, splitUrl } from './common.js';
+import { setSecurityHeaders, sendError, sendJson, splitUrl, readJsonBody } from './common.js';
 
 const MAX_URL_LENGTH = 4096;
+
+function isAdminAuthorized(req) {
+  const token = process.env.ADMIN_TOKEN || process.env.SP_ADMIN_KEY;
+  const authHeader = req.headers['authorization'];
+  const customHeader = req.headers['x-admin-token'];
+  if (token) {
+    return authHeader === `Bearer ${token}` || customHeader === token;
+  }
+  const ip = req.socket?.remoteAddress;
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
 
 /**
  * The GET /healthz body.
@@ -26,6 +37,7 @@ export function healthReport({ startedAt, network, registry, lobby }) {
     // older than this reloads itself, so a deploy reaches clients that never reload
     build: buildTag(),
     sockets: network.connectionCount, sessions: registry.size, ...lobby.stats(),
+    maintenance: lobby.maintenanceStatus ? lobby.maintenanceStatus() : null,
   };
 }
 
@@ -42,6 +54,28 @@ export function createRequestHandler({ serveStatic, health, log }) {
     if (url.length > MAX_URL_LENGTH) { sendError(req, res, 414, '请求地址过长 · URI too long'); return; }
     const parts = splitUrl(url);
     if (!parts) { sendError(req, res, 400, '请求地址无效 · Bad request'); return; }
+    if (parts.rawPath === '/admin/maintenance') {
+      if (!isAdminAuthorized(req)) {
+        sendJson(req, res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        sendJson(req, res, 200, { ok: true, maintenance: health.lobby.maintenanceStatus() });
+        return;
+      }
+      if (req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const st = (body.cancel || body.clear)
+          ? health.lobby.cancelMaintenance()
+          : health.lobby.setMaintenance(body);
+        sendJson(req, res, 200, { ok: true, maintenance: st });
+        return;
+      }
+      res.setHeader('Allow', 'GET, HEAD, POST');
+      sendError(req, res, 405, '不支持的请求方法 · Method not allowed');
+      return;
+    }
+
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.setHeader('Allow', 'GET, HEAD');
       sendError(req, res, 405, '不支持的请求方法 · Method not allowed');
