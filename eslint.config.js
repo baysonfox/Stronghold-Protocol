@@ -62,6 +62,7 @@ export default [
       'public/fonts/**',
       'public/dev/**',
       '.cache/**',
+      '.worktrees/**',
       'coverage/**',
     ],
   },

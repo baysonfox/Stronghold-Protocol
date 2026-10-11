@@ -1,0 +1,36 @@
+# docker-compose.yml — Zero-downtime blue-green deployment for Stronghold Protocol.
+# Blue runs on 127.0.0.1:3010, Green runs on 127.0.0.1:3011.
+# Caddy dynamically routes between them without dropping ongoing WebSockets.
+
+services:
+  stronghold-blue:
+    build:
+      context: .
+    image: stronghold-protocol:latest
+    container_name: stronghold-blue
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:3010:3000
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - TRUST_PROXY=1
+    volumes:
+      - ./public/assets:/app/public/assets:ro
+      - ./data/assets.json:/app/data/assets.json:ro
+
+  stronghold-green:
+    build:
+      context: .
+    image: stronghold-protocol:latest
+    container_name: stronghold-green
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:3011:3000
+    environment:
+      - PORT=3000
+      - HOST=0.0.0.0
+      - TRUST_PROXY=1
+    volumes:
+      - ./public/assets:/app/public/assets:ro
+      - ./data/assets.json:/app/data/assets.json:ro
