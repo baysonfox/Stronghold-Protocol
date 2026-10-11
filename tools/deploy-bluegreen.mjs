@@ -340,8 +340,8 @@ async function doDeploy(opts) {
       `[${nowStr()}] 旧实例排空中: sockets=${b.sockets}, matches=${b.matches}, humans=${b.humans} (超时剩余: ${remMins}m)`
     );
 
-    if (b.sockets === 0) {
-      console.log(`\n🎯 [${nowStr()}] 旧实例活跃长连接数已归零 (sockets === 0)！`);
+    if (b.matches === 0 && b.sockets === 0) {
+      console.log(`\n🎯 [${nowStr()}] 旧实例已完全排空 (matches === 0 且 sockets === 0)！`);
       break;
     }
   }
