@@ -15,6 +15,7 @@ services:
       - PORT=3000
       - HOST=0.0.0.0
       - TRUST_PROXY=1
+      - ADMIN_TOKEN=sp-admin-priestess-2026
     volumes:
       - ./public/assets:/app/public/assets:ro
       - ./data/assets.json:/app/data/assets.json:ro
@@ -31,6 +32,7 @@ services:
       - PORT=3000
       - HOST=0.0.0.0
       - TRUST_PROXY=1
+      - ADMIN_TOKEN=sp-admin-priestess-2026
     volumes:
       - ./public/assets:/app/public/assets:ro
       - ./data/assets.json:/app/data/assets.json:ro

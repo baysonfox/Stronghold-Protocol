@@ -16,13 +16,14 @@ const MAX_URL_LENGTH = 4096;
 
 function isAdminAuthorized(req) {
   const token = process.env.ADMIN_TOKEN || process.env.SP_ADMIN_KEY;
-  const authHeader = req.headers['authorization'];
-  const customHeader = req.headers['x-admin-token'];
   if (token) {
+    const authHeader = req.headers['authorization'];
+    const customHeader = req.headers['x-admin-token'];
     return authHeader === `Bearer ${token}` || customHeader === token;
   }
-  const ip = req.socket?.remoteAddress;
-  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  const ip = req.socket?.remoteAddress || '';
+  const clean = ip.replace(/^::ffff:/, '');
+  return clean === '127.0.0.1' || clean === '::1' || clean === '172.17.0.1' || clean === '172.18.0.1';
 }
 
 /**

@@ -33,6 +33,7 @@ const DEFAULTS = {
   caddyContainer: 'zoot-caddy',
   dir: '/root/Stronghold-Protocol',
   timeoutMin: 45,
+  adminToken: process.env.ADMIN_TOKEN || 'sp-admin-priestess-2026',
 };
 
 function parseArgs(args) {
@@ -97,11 +98,11 @@ function runCmdOut(cmd, { cwd } = {}) {
   }
 }
 
-function fetchJson(url, { timeoutMs = 3000 } = {}) {
+function fetchJson(url, { headers = {}, timeoutMs = 3000 } = {}) {
   return new Promise((resolve) => {
     const isHttps = url.startsWith('https://');
     const mod = isHttps ? https : http;
-    const req = mod.get(url, { rejectUnauthorized: false, timeout: timeoutMs }, (res) => {
+    const req = mod.get(url, { headers, rejectUnauthorized: false, timeout: timeoutMs }, (res) => {
       let data = '';
       res.on('data', (c) => { data += c; });
       res.on('end', () => {
@@ -372,7 +373,10 @@ async function showMatches(opts) {
     activePort = opts.bluePort;
   }
 
-  const res = await fetchJson(`http://127.0.0.1:${activePort}/admin/matches`, { timeoutMs: 3000 });
+  const res = await fetchJson(`http://127.0.0.1:${activePort}/admin/matches`, {
+    headers: { Authorization: `Bearer ${opts.adminToken}` },
+    timeoutMs: 3000,
+  });
   if (res.status !== 200 || !res.body?.ok) {
     console.error(`❌ 获取战况失败: http://127.0.0.1:${activePort}/admin/matches 返回 ${res.status}`);
     process.exit(1);
