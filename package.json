@@ -39,6 +39,7 @@
     "typecheck": "tsc --noEmit --checkJs -p jsconfig.json",
     "check:imports": "node tools/check-imports.mjs",
     "ci": "node tools/ci.mjs",
+    "deploy:prod": "./scripts/deploy-prod.sh",
     "package": "node tools/package.mjs",
     "package:lite": "node tools/package.mjs --lite"
   },

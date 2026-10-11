@@ -252,6 +252,30 @@ services:
       SP_VERIFY: "off"
 ```
 
+### 3.1 生产环境：零停机蓝绿热重载 (Caddy + Docker)
+
+游戏房间与对局保存在内存中，重启容器会中断进行中的对局。对于长期对公网开放的服务器，推荐使用项目自带的双槽位蓝绿部署架构配合 Caddy 反代实现**零停机平滑更新**：
+
+1. **双槽位服务（`docker-compose.yml`）**：
+   - `stronghold-blue`（端口 3010）与 `stronghold-green`（端口 3011）互为主备。
+2. **Caddy 优雅重载**：
+   - 切换 upstream 时，Caddy 保持正在进行的 WebSocket 长连接不断，新连接和刷新请求无缝流入新版本。
+3. **前端配合（`public/js/ui/buildGuard.js`）**：
+   - 大厅玩家自动刷新接入新容器；战斗中玩家留在老容器直至对局结算，终局返回大厅时自动刷新。
+4. **一键运维工具（`tools/deploy-bluegreen.mjs`）**：
+   ```bash
+   # 查看当前蓝绿状态与 Caddy 路由
+   node tools/deploy-bluegreen.mjs --status
+
+   # 远程无缝发布（自动 rsync 代码与素材 -> 构建目标容器 -> 热重载 Caddy -> 等待旧容器排空并安全停止）
+   node tools/deploy-bluegreen.mjs --remote user@host --sync
+
+   # 紧急秒级回滚
+   node tools/deploy-bluegreen.mjs --remote user@host --rollback
+   ```
+
+详见 [findings/blue-green-deployment.md](../findings/blue-green-deployment.md)。
+
 ## 4. macOS / Linux 常驻
 
 - 临时开服：`scripts/start.sh`（或 `npm start`），保持终端窗口打开。macOS 首次会询问是否允许 node 接受传入连接，选「允许」。
