@@ -48,6 +48,9 @@ npm run deploy:prod
 # 查看当前活跃槽位、端口与对局/在线人数
 ./scripts/deploy-prod.sh --status
 
+# 查看全服详细实时战况（每个房间模式/难度/当前第几回合/处于什么阶段/席位玩家与血量）
+./scripts/deploy-prod.sh --matches
+
 # 快速发布（Caddy 切换后立即退出命令行，让旧容器在后台自然陪玩家打完并销毁）
 ./scripts/deploy-prod.sh --no-wait
 

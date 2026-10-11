@@ -4,6 +4,7 @@
 # 用法:
 #   ./scripts/deploy-prod.sh           # 默认：同步本地代码/素材，执行零停机蓝绿发布
 #   ./scripts/deploy-prod.sh --status  # 查看生产环境当前活跃实例与 Caddy 路由状态
+#   ./scripts/deploy-prod.sh --matches # 查看全服实时战况 (房间/难度/回合/阶段/玩家)
 #   ./scripts/deploy-prod.sh --rollback# 紧急回滚：将 Caddy 瞬时切回另一实例
 #   ./scripts/deploy-prod.sh --no-wait # 切换流量后立即退出，不阻塞等待旧容器排空
 
@@ -31,7 +32,7 @@ else
   EXTRA_ARGS=()
   HAS_ACTION=false
   for arg in "$@"; do
-    if [[ "$arg" == "--status" || "$arg" == "-s" || "$arg" == "--rollback" || "$arg" == "-r" ]]; then
+    if [[ "$arg" == "--status" || "$arg" == "-s" || "$arg" == "--rollback" || "$arg" == "-r" || "$arg" == "--matches" || "$arg" == "-m" ]]; then
       HAS_ACTION=true
     fi
   done

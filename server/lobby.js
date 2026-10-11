@@ -313,6 +313,106 @@ export class Lobby {
     return { rooms: this.rooms.size, matches, humans, bots, spectators };
   }
 
+  /** Anonymous breakdown counters for /healthz. */
+  breakdown() {
+    const byMode = { solo: 0, coop: 0 };
+    const byDifficulty = {};
+    const byPhase = { WAITING: 0 };
+    const byHumans = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    let matchesActive = 0;
+    let roomsWaiting = 0;
+
+    for (const r of this.rooms.values()) {
+      if (r.mode in byMode) byMode[r.mode]++;
+      else byMode[r.mode] = 1;
+
+      const diff = r.difficulty || 'NORMAL';
+      byDifficulty[diff] = (byDifficulty[diff] || 0) + 1;
+
+      const humanCount = r.seats.filter((s) => s && !s.isBot && !s.left).length;
+      if (humanCount >= 1 && humanCount <= 4) byHumans[humanCount] = (byHumans[humanCount] || 0) + 1;
+
+      if (r.match) {
+        matchesActive++;
+        const phase = r.match.phase || 'UNKNOWN';
+        byPhase[phase] = (byPhase[phase] || 0) + 1;
+      } else {
+        roomsWaiting++;
+        byPhase.WAITING++;
+      }
+    }
+
+    return {
+      byMode,
+      byDifficulty,
+      byPhase,
+      byHumans,
+      matchesActive,
+      roomsWaiting,
+    };
+  }
+
+  /** Detailed report of every room and match for /admin/matches. */
+  detailedMatchesReport() {
+    const now = this.now();
+    const rooms = [];
+    for (const r of this.rooms.values()) {
+      const match = r.match;
+      const humans = r.seats.filter((s) => s && !s.isBot && !s.left).length;
+      const bots = r.seats.filter((s) => s && s.isBot).length;
+      const roomItem = {
+        code: r.code,
+        mode: r.mode,
+        difficulty: r.difficulty || 'NORMAL',
+        status: match ? 'IN_MATCH' : 'WAITING',
+        createdAt: r.createdAt,
+        ageSec: Math.max(0, Math.round((now - r.createdAt) / 1000)),
+        matchCount: r.matchCount,
+        match: match ? {
+          round: match.round ?? 1,
+          maxRound: match.gd?.bossRound ?? match.lastRound ?? 15,
+          phase: match.phase || 'INFO_CHECK',
+          paused: !!match.paused,
+          startedAt: match.startedAt ?? now,
+          durationSec: Math.max(0, Math.round((now - (match.startedAt ?? now)) / 1000)),
+        } : null,
+        seats: r.seats.map((s) => {
+          if (!s) return null;
+          const ps = match?.players?.get(s.playerId);
+          return {
+            seat: s.seat,
+            name: s.name || (s.isBot ? 'AI 队友' : '博士'),
+            isBot: !!s.isBot,
+            connected: !!s.connected && !s.left,
+            ready: !!s.ready,
+            alive: ps ? !!ps.alive : true,
+            lp: ps ? ps.lp : null,
+            funds: ps ? ps.funds : null,
+            autoplay: ps ? !!ps.autoplay : false,
+          };
+        }).filter(Boolean),
+        humans,
+        bots,
+        spectators: r.spectators.length,
+      };
+      rooms.push(roomItem);
+    }
+
+    // Sort: ongoing matches first, then by recency of match start or room creation
+    rooms.sort((a, b) => {
+      if (a.status === 'IN_MATCH' && b.status !== 'IN_MATCH') return -1;
+      if (a.status !== 'IN_MATCH' && b.status === 'IN_MATCH') return 1;
+      const tA = a.match ? a.match.startedAt : a.createdAt;
+      const tB = b.match ? b.match.startedAt : b.createdAt;
+      return tB - tA;
+    });
+
+    return {
+      rooms,
+      breakdown: this.breakdown(),
+    };
+  }
+
   // ---------------------------------------------------------------------------------------------------
   // net.js handler interface
   // ---------------------------------------------------------------------------------------------------

@@ -40,6 +40,7 @@ function parseArgs(args) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--status' || a === '-s') opts.mode = 'status';
+    else if (a === '--matches' || a === '-m') opts.mode = 'matches';
     else if (a === '--rollback' || a === '-r') opts.mode = 'rollback';
     else if (a === '--remote') opts.remote = args[++i];
     else if (a === '--sync') opts.sync = true;
@@ -62,6 +63,7 @@ function parseArgs(args) {
 
   运维查询与回滚:
     --status, -s               查看当前蓝绿实例状态与 Caddy 路由
+    --matches, -m              查看全服实时战况明细 (房间/难度/回合/阶段/玩家)
     --rollback, -r             快速回滚：将 Caddy 路由瞬间切回另一个颜色
 
   自定义配置:
@@ -155,6 +157,7 @@ async function runRemote(opts) {
   // Construct command to execute remotely
   const forwardedFlags = [];
   if (opts.mode === 'status') forwardedFlags.push('--status');
+  if (opts.mode === 'matches') forwardedFlags.push('--matches');
   if (opts.mode === 'rollback') forwardedFlags.push('--rollback');
   if (!opts.wait) forwardedFlags.push('--no-wait');
   if (opts.timeoutMin !== DEFAULTS.timeoutMin) forwardedFlags.push(`--timeout ${opts.timeoutMin}`);
@@ -358,6 +361,90 @@ async function doDeploy(opts) {
   console.log(`=======================================================\n`);
 }
 
+async function showMatches(opts) {
+  let activePort;
+  let activeColor = 'blue';
+  try {
+    const { port, color } = detectActivePort(opts);
+    activePort = port;
+    activeColor = color;
+  } catch (_e) {
+    activePort = opts.bluePort;
+  }
+
+  const res = await fetchJson(`http://127.0.0.1:${activePort}/admin/matches`, { timeoutMs: 3000 });
+  if (res.status !== 200 || !res.body?.ok) {
+    console.error(`❌ 获取战况失败: http://127.0.0.1:${activePort}/admin/matches 返回 ${res.status}`);
+    process.exit(1);
+  }
+
+  const data = res.body;
+  const bd = data.breakdown || {};
+  const rooms = data.rooms || [];
+  const inMatchRooms = rooms.filter((r) => r.status === 'IN_MATCH');
+  const waitingRooms = rooms.filter((r) => r.status === 'WAITING');
+
+  console.log(`================================================================================`);
+  console.log(`🎮 全服实时战况监控 [${activeColor.toUpperCase()}:${activePort}] (${new Date().toLocaleTimeString()})`);
+  console.log(`  房间总数: ${rooms.length} 个 | 正在对局: ${inMatchRooms.length} 局 | 组队等待: ${waitingRooms.length} 间`);
+  console.log(`  在线长连接: ${data.sockets ?? '-'} Sockets | 真人: ${data.humans ?? 0} 人 | AI: ${data.bots ?? 0} 人 | 观战: ${data.spectators ?? 0} 人`);
+  console.log(`================================================================================\n`);
+
+  if (bd.byMode || bd.byDifficulty || bd.byPhase) {
+    console.log(`📊 宏观分布汇总:`);
+    if (bd.byMode) {
+      console.log(`  • 模式分布: 多人联防 (coop) ${bd.byMode.coop || 0} 间, 独立模拟 (solo) ${bd.byMode.solo || 0} 间`);
+    }
+    if (bd.byDifficulty) {
+      const diffStr = Object.entries(bd.byDifficulty).map(([k, v]) => `${k}: ${v}`).join(', ');
+      console.log(`  • 难度分布: ${diffStr}`);
+    }
+    if (bd.byPhase) {
+      const phaseStr = Object.entries(bd.byPhase).filter(([_, v]) => v > 0).map(([k, v]) => `${k}: ${v}`).join(', ');
+      console.log(`  • 阶段分布: ${phaseStr}`);
+    }
+    console.log('');
+  }
+
+  if (inMatchRooms.length > 0) {
+    console.log(`⚔️  进行中的对局 (${inMatchRooms.length} 局):`);
+    inMatchRooms.forEach((r, idx) => {
+      const m = r.match;
+      const durMin = Math.floor((m.durationSec || 0) / 60);
+      const durSec = (m.durationSec || 0) % 60;
+      const durStr = `${durMin}分${String(durSec).padStart(2, '0')}秒`;
+      const pauseStr = m.paused ? ' [暂停中 ⏸]' : '';
+      console.log(`  [${idx + 1}] 房间 ${r.code} · ${r.mode === 'solo' ? '独立模拟' : '多人联防'} (${r.mode} / ${r.difficulty})${pauseStr}`);
+      console.log(`      战局进度: 第 ${m.round}/${m.maxRound} 回合 · ${m.phase} · 已进行 ${durStr}`);
+      const seatsStr = r.seats.map((s) => {
+        const botTag = s.isBot ? ' [AI]' : '';
+        const connTag = s.connected ? '' : ' [断线]';
+        const lpTag = s.lp != null ? ` (LP: ${s.lp})` : '';
+        return `P${s.seat + 1}: ${s.name}${botTag}${connTag}${lpTag}`;
+      }).join(' | ');
+      console.log(`      席位玩家 (${r.humans}真人/${r.bots}AI): ${seatsStr}`);
+      console.log('');
+    });
+  } else {
+    console.log(`⚔️  当前暂无正在进行的对局。\n`);
+  }
+
+  if (waitingRooms.length > 0) {
+    console.log(`⏳ 组队等待中的房间 (${waitingRooms.length} 间):`);
+    waitingRooms.forEach((r, idx) => {
+      const ageMin = Math.floor((r.ageSec || 0) / 60);
+      const seatsStr = r.seats.map((s) => {
+        const readyTag = s.ready ? ' [已准备]' : ' [未准备]';
+        const botTag = s.isBot ? ' [AI]' : '';
+        return `P${s.seat + 1}: ${s.name}${botTag}${readyTag}`;
+      }).join(' | ');
+      console.log(`  [${idx + 1}] 房间 ${r.code} · ${r.mode} / ${r.difficulty} (已等待 ${ageMin}分钟)`);
+      console.log(`      席位: ${seatsStr || '暂无玩家'}`);
+    });
+    console.log('');
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.remote) {
@@ -367,6 +454,8 @@ async function main() {
 
   if (opts.mode === 'status') {
     await showStatus(opts);
+  } else if (opts.mode === 'matches') {
+    await showMatches(opts);
   } else if (opts.mode === 'rollback') {
     await doRollback(opts);
   } else {

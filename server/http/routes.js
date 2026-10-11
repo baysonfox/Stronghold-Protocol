@@ -37,6 +37,7 @@ export function healthReport({ startedAt, network, registry, lobby }) {
     // older than this reloads itself, so a deploy reaches clients that never reload
     build: buildTag(),
     sockets: network.connectionCount, sessions: registry.size, ...lobby.stats(),
+    breakdown: lobby.breakdown ? lobby.breakdown() : null,
     maintenance: lobby.maintenanceStatus ? lobby.maintenanceStatus() : null,
   };
 }
@@ -54,6 +55,26 @@ export function createRequestHandler({ serveStatic, health, log }) {
     if (url.length > MAX_URL_LENGTH) { sendError(req, res, 414, '请求地址过长 · URI too long'); return; }
     const parts = splitUrl(url);
     if (!parts) { sendError(req, res, 400, '请求地址无效 · Bad request'); return; }
+    if (parts.rawPath === '/admin/matches' || parts.rawPath === '/admin/rooms') {
+      if (!isAdminAuthorized(req)) {
+        sendJson(req, res, 401, { ok: false, error: 'unauthorized' });
+        return;
+      }
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        const report = health.lobby.detailedMatchesReport ? health.lobby.detailedMatchesReport() : { rooms: [] };
+        sendJson(req, res, 200, {
+          ok: true,
+          timestamp: Date.now(),
+          ...health.lobby.stats(),
+          ...report,
+        });
+        return;
+      }
+      res.setHeader('Allow', 'GET, HEAD');
+      sendError(req, res, 405, '不支持的请求方法 · Method not allowed');
+      return;
+    }
+
     if (parts.rawPath === '/admin/maintenance') {
       if (!isAdminAuthorized(req)) {
         sendJson(req, res, 401, { ok: false, error: 'unauthorized' });

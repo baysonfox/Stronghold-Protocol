@@ -249,4 +249,54 @@ describe('maintenance announcement & cutoff', () => {
     ]);
     assert.match(cancelOut, /当前未计划停服维护/);
   });
+
+  test('GET /healthz includes anonymous breakdown of modes, difficulties and phases', async () => {
+    const c = await pool.connect();
+    await c.hello('Doctor');
+    await c.request({ t: 'room.create', mode: 'coop', difficulty: 'ABYSS' });
+
+    const health = await httpReq(srv.port, '/healthz');
+    assert.equal(health.status, 200);
+    assert.ok(health.body.breakdown);
+    assert.ok(health.body.breakdown.byMode.coop >= 1);
+    assert.ok(health.body.breakdown.byDifficulty.ABYSS >= 1);
+    assert.ok(health.body.breakdown.roomsWaiting >= 1);
+  });
+
+  test('GET /admin/matches returns detailed match states and honors ADMIN_TOKEN', async () => {
+    const c = await pool.connect();
+    await c.hello('Captain');
+    await c.request({ t: 'room.create', mode: 'solo', difficulty: 'HARD' });
+    await c.request({ t: 'room.start' });
+    await c.waitFor('m.public', () => true, 3000);
+
+    // Query /admin/matches
+    const res = await httpReq(srv.port, '/admin/matches');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.ok, true);
+    assert.ok(Array.isArray(res.body.rooms));
+    assert.ok(res.body.rooms.length >= 1);
+
+    const room = res.body.rooms.find((r) => r.mode === 'solo' && r.difficulty === 'HARD');
+    assert.ok(room);
+    assert.equal(room.status, 'IN_MATCH');
+    assert.ok(room.match);
+    assert.equal(room.match.round, 1);
+    assert.ok(room.seats.some((s) => s.name === 'Captain'));
+
+    // Verify token protection if ADMIN_TOKEN is set
+    process.env.ADMIN_TOKEN = 'secret-guard';
+    try {
+      const unauth = await httpReq(srv.port, '/admin/matches');
+      assert.equal(unauth.status, 401);
+
+      const auth = await httpReq(srv.port, '/admin/matches', {
+        headers: { Authorization: 'Bearer secret-guard' },
+      });
+      assert.equal(auth.status, 200);
+      assert.equal(auth.body.ok, true);
+    } finally {
+      delete process.env.ADMIN_TOKEN;
+    }
+  });
 });
