@@ -34,6 +34,7 @@ const DEFAULTS = {
   dir: '/root/Stronghold-Protocol',
   timeoutMin: 45,
   adminToken: process.env.ADMIN_TOKEN || 'sp-admin-priestess-2026',
+  streamCloseDelay: '75m',
 };
 
 function parseArgs(args) {
@@ -52,6 +53,7 @@ function parseArgs(args) {
     else if (a === '--blue-port') opts.bluePort = Number(args[++i]);
     else if (a === '--green-port') opts.greenPort = Number(args[++i]);
     else if (a === '--timeout') opts.timeoutMin = Number(args[++i]);
+    else if (a === '--stream-close-delay') opts.streamCloseDelay = args[++i];
     else if (a === '--no-wait') opts.wait = false;
     else if (a === '--help' || a === '-h') {
       console.log(`用法: node tools/deploy-bluegreen.mjs [options]
@@ -61,6 +63,7 @@ function parseArgs(args) {
     --sync                     部署前自动通过 rsync 将本地代码和素材同步到远端
     --no-wait                  切换 Caddy 后立即返回，不阻塞等待旧容器排空
     --timeout <分钟>           旧容器排空最大等待时间 (默认: ${DEFAULTS.timeoutMin} 分钟)
+    --stream-close-delay <dur> Caddy WebSocket 优雅排空延迟 (默认: ${DEFAULTS.streamCloseDelay})
 
   运维查询与回滚:
     --status, -s               查看当前蓝绿实例状态与 Caddy 路由
@@ -127,6 +130,32 @@ function nowStr() {
   return d.toTimeString().split(' ')[0];
 }
 
+function formatDurCompact(sec) {
+  if (sec == null || !Number.isFinite(sec)) return '';
+  const s = Math.max(0, Math.round(sec));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) {
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return rem > 0 ? `${m}m${rem}s` : `${m}m`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return m > 0 ? `${h}h${m}m` : `${h}h`;
+}
+
+function formatDurCn(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  if (s >= 3600) {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return `${h}小时${String(m).padStart(2, '0')}分`;
+  }
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}分${String(rem).padStart(2, '0')}秒`;
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Remote SSH & Rsync Orchestration (when --remote is supplied)
 // ---------------------------------------------------------------------------------------------------
@@ -166,6 +195,7 @@ async function runRemote(opts) {
   if (opts.caddyfile !== DEFAULTS.caddyfile) forwardedFlags.push(`--caddyfile "${opts.caddyfile}"`);
   if (opts.caddyContainer !== DEFAULTS.caddyContainer) forwardedFlags.push(`--caddy-container "${opts.caddyContainer}"`);
   if (opts.domain !== DEFAULTS.domain) forwardedFlags.push(`--domain "${opts.domain}"`);
+  if (opts.streamCloseDelay !== DEFAULTS.streamCloseDelay) forwardedFlags.push(`--stream-close-delay "${opts.streamCloseDelay}"`);
 
   const remoteCmd = `cd "${opts.dir}" && node tools/deploy-bluegreen.mjs ${forwardedFlags.join(' ')}`;
   console.log(`[${nowStr()}] 🚀 在远端执行: ${remoteCmd}\n`);
@@ -179,6 +209,43 @@ async function runRemote(opts) {
 // ---------------------------------------------------------------------------------------------------
 // Local Execution (Runs directly on the host)
 // ---------------------------------------------------------------------------------------------------
+
+function updateCaddyConfig(caddyContent, { domain, fromPort, toPort, streamCloseDelay = '75m' }) {
+  const domainIdx = caddyContent.indexOf(domain);
+  const searchStart = domainIdx !== -1 ? domainIdx : 0;
+  const prefix = caddyContent.slice(0, searchStart);
+  const targetSlice = caddyContent.slice(searchStart);
+
+  // 匹配带 { ... } 块的 reverse_proxy
+  const blockRegex = new RegExp(
+    `(reverse_proxy\\s+(?:127\\.0\\.0\\.1|localhost):)${fromPort}(\\s*\\{[^}]*\\})`,
+    'm'
+  );
+
+  // 匹配单行 reverse_proxy
+  const singleLineRegex = new RegExp(
+    `(reverse_proxy\\s+(?:127\\.0\\.0\\.1|localhost):)${fromPort}`,
+    'm'
+  );
+
+  let newSlice;
+  if (blockRegex.test(targetSlice)) {
+    newSlice = targetSlice.replace(blockRegex, (_match, p1) => {
+      return `${p1}${toPort} {\n\t\tstream_close_delay ${streamCloseDelay}\n\t}`;
+    });
+  } else if (singleLineRegex.test(targetSlice)) {
+    newSlice = targetSlice.replace(singleLineRegex, (_match, p1) => {
+      return `${p1}${toPort} {\n\t\tstream_close_delay ${streamCloseDelay}\n\t}`;
+    });
+  } else {
+    newSlice = targetSlice.replace(
+      new RegExp(`(reverse_proxy\\s+(?:127\\.0\\.0\\.1|localhost):)${fromPort}`),
+      `$1${toPort}`
+    );
+  }
+
+  return prefix + newSlice;
+}
 
 function detectActivePort(opts) {
   if (!fs.existsSync(opts.caddyfile)) {
@@ -212,8 +279,14 @@ async function showStatus(opts) {
     const ps = runCmdOut(`docker ps --filter "publish=${port}" --format "{{.Names}} ({{.Status}})"`);
     if (res.status === 200 && res.body?.ok) {
       const b = res.body;
+      const activeM = b.activeMatches ?? b.matches;
+      const suspM = b.suspendedMatches ?? 0;
+      const hConn = b.humansConnected ?? b.humans;
+      const hDisc = b.humansDisconnected ?? 0;
+      const matchInfo = suspM > 0 ? `${activeM} 活跃 (+${suspM} 离线挂起)` : `${activeM}`;
+      const humanInfo = hDisc > 0 ? `${hConn} 在线 (+${hDisc} 断线保留)` : `${hConn}`;
       console.log(`   * ${name.toUpperCase()} (:${port}) — ${ps || 'running'}`);
-      console.log(`     版本: v${b.app} (build: ${b.build}), 在线长连接: ${b.sockets}, 房间: ${b.rooms}, 对局: ${b.matches}, 玩家: ${b.humans}`);
+      console.log(`     版本: v${b.app} (build: ${b.build}), 在线长连接: ${b.sockets}, 房间: ${b.rooms}, 对局: ${matchInfo}, 玩家: ${humanInfo}`);
     } else {
       console.log(`   * ${name.toUpperCase()} (:${port}) — ${ps || '未运行 / 无响应'}`);
     }
@@ -244,10 +317,12 @@ async function doRollback(opts) {
   }
 
   // Swap port in Caddyfile
-  const newContent = content.replace(
-    new RegExp(`(reverse_proxy\\s+(?:127\\.0\\.0\\.1|localhost):)${port}`),
-    `$1${targetPort}`
-  );
+  const newContent = updateCaddyConfig(content, {
+    domain: opts.domain,
+    fromPort: port,
+    toPort: targetPort,
+    streamCloseDelay: opts.streamCloseDelay,
+  });
   fs.writeFileSync(opts.caddyfile, newContent, 'utf8');
   runCmd(`docker exec ${opts.caddyContainer} caddy reload -c /etc/caddy/Caddyfile`);
   console.log(`[${nowStr()}] ✅ 回滚完成！Caddy 已切回 ${targetColor.toUpperCase()} (:${targetPort})`);
@@ -300,10 +375,12 @@ async function doDeploy(opts) {
   console.log(`\n[${nowStr()}] 🔀 步骤 3/4: 切换 Caddy 流量至 ${targetColor.toUpperCase()} (:${targetPort})...`);
   // Backup Caddyfile
   fs.copyFileSync(opts.caddyfile, `${opts.caddyfile}.bak`);
-  const updatedCaddy = caddyContent.replace(
-    new RegExp(`(reverse_proxy\\s+(?:127\\.0\\.0\\.1|localhost):)${currentPort}`),
-    `$1${targetPort}`
-  );
+  const updatedCaddy = updateCaddyConfig(caddyContent, {
+    domain: opts.domain,
+    fromPort: currentPort,
+    toPort: targetPort,
+    streamCloseDelay: opts.streamCloseDelay,
+  });
   fs.writeFileSync(opts.caddyfile, updatedCaddy, 'utf8');
 
   try {
@@ -335,13 +412,17 @@ async function doDeploy(opts) {
       break;
     }
     const b = oldRes.body;
+    const activeMatches = b.activeMatches ?? b.matches;
+    const suspendedMatches = b.suspendedMatches ?? 0;
+    const humansConnected = b.humansConnected ?? b.humans;
     const remMins = Math.round((deadline - Date.now()) / 60000);
     console.log(
-      `[${nowStr()}] 旧实例排空中: sockets=${b.sockets}, matches=${b.matches}, humans=${b.humans} (超时剩余: ${remMins}m)`
+      `[${nowStr()}] 旧实例排空中: sockets=${b.sockets}, activeMatches=${activeMatches}, suspendedMatches=${suspendedMatches}, humansConnected=${humansConnected} (超时剩余: ${remMins}m)`
     );
 
-    if (b.matches === 0 && b.sockets === 0) {
-      console.log(`\n🎯 [${nowStr()}] 旧实例已完全排空 (matches === 0 且 sockets === 0)！`);
+    if (activeMatches === 0 && b.sockets === 0) {
+      const suspNote = suspendedMatches > 0 ? ` (已忽略 ${suspendedMatches} 局全员断线的离线挂起对局)` : '';
+      console.log(`\n🎯 [${nowStr()}] 旧实例已完全排空 (activeMatches === 0 且 sockets === 0)${suspNote}！`);
       break;
     }
   }
@@ -386,18 +467,26 @@ async function showMatches(opts) {
   const bd = data.breakdown || {};
   const rooms = data.rooms || [];
   const inMatchRooms = rooms.filter((r) => r.status === 'IN_MATCH');
+  const activeMatchRooms = inMatchRooms.filter((r) => !r.suspended);
+  const suspendedMatchRooms = inMatchRooms.filter((r) => r.suspended);
   const waitingRooms = rooms.filter((r) => r.status === 'WAITING');
+  const hConn = data.humansConnected ?? data.humans ?? 0;
+  const hDisc = data.humansDisconnected ?? 0;
 
   console.log(`================================================================================`);
   console.log(`🎮 全服实时战况监控 [${activeColor.toUpperCase()}:${activePort}] (${new Date().toLocaleTimeString()})`);
-  console.log(`  房间总数: ${rooms.length} 个 | 正在对局: ${inMatchRooms.length} 局 | 组队等待: ${waitingRooms.length} 间`);
-  console.log(`  在线长连接: ${data.sockets ?? '-'} Sockets | 真人: ${data.humans ?? 0} 人 | AI: ${data.bots ?? 0} 人 | 观战: ${data.spectators ?? 0} 人`);
+  console.log(`  房间总数: ${rooms.length} 个 | 活跃对局: ${activeMatchRooms.length} 局 | 离线挂起: ${suspendedMatchRooms.length} 局 | 组队等待: ${waitingRooms.length} 间`);
+  console.log(`  在线长连接: ${data.sockets ?? '-'} Sockets | 在线真人: ${hConn} 人 (断线保留: ${hDisc} 人) | AI: ${data.bots ?? 0} 人 | 观战: ${data.spectators ?? 0} 人`);
   console.log(`================================================================================\n`);
 
   if (bd.byMode || bd.byDifficulty || bd.byPhase) {
     console.log(`📊 宏观分布汇总:`);
     if (bd.byMode) {
-      console.log(`  • 模式分布: 多人联防 (coop) ${bd.byMode.coop || 0} 间, 独立模拟 (solo) ${bd.byMode.solo || 0} 间`);
+      const coopSusp = suspendedMatchRooms.filter((r) => r.mode === 'coop').length;
+      const soloSusp = suspendedMatchRooms.filter((r) => r.mode === 'solo').length;
+      const coopDetail = coopSusp > 0 ? ` (含离线挂起 ${coopSusp} 间)` : '';
+      const soloDetail = soloSusp > 0 ? ` (含离线挂起 ${soloSusp} 间)` : '';
+      console.log(`  • 模式分布: 多人联防 (coop) ${bd.byMode.coop || 0} 间${coopDetail}, 独立模拟 (solo) ${bd.byMode.solo || 0} 间${soloDetail}`);
     }
     if (bd.byDifficulty) {
       const diffStr = Object.entries(bd.byDifficulty).map(([k, v]) => `${k}: ${v}`).join(', ');
@@ -410,27 +499,50 @@ async function showMatches(opts) {
     console.log('');
   }
 
-  if (inMatchRooms.length > 0) {
-    console.log(`⚔️  进行中的对局 (${inMatchRooms.length} 局):`);
-    inMatchRooms.forEach((r, idx) => {
+  const formatSeat = (s, { showResumeLeft = false } = {}) => {
+    const botTag = s.isBot ? ' [AI]' : '';
+    let connTag = '';
+    if (!s.isBot) {
+      if (s.left) {
+        connTag = ' [已退出]';
+      } else if (!s.connected) {
+        const dur = formatDurCompact(s.disconnectedSec);
+        const left = showResumeLeft && s.resumeLeftSec != null ? `, 剩${formatDurCompact(s.resumeLeftSec)}` : '';
+        connTag = dur ? ` [断线 ${dur}${left}]` : ' [断线]';
+      }
+    }
+    const lpTag = s.lp != null ? ` (LP: ${s.lp})` : '';
+    return `P${s.seat + 1}: ${s.name}${botTag}${connTag}${lpTag}`;
+  };
+
+  if (activeMatchRooms.length > 0) {
+    console.log(`⚔️  活跃对局 (${activeMatchRooms.length} 局):`);
+    activeMatchRooms.forEach((r, idx) => {
       const m = r.match;
-      const durMin = Math.floor((m.durationSec || 0) / 60);
-      const durSec = (m.durationSec || 0) % 60;
-      const durStr = `${durMin}分${String(durSec).padStart(2, '0')}秒`;
+      const durStr = formatDurCn(m.durationSec || 0);
       const pauseStr = m.paused ? ' [暂停中 ⏸]' : '';
       console.log(`  [${idx + 1}] 房间 ${r.code} · ${r.mode === 'solo' ? '独立模拟' : '多人联防'} (${r.mode} / ${r.difficulty})${pauseStr}`);
       console.log(`      战局进度: 第 ${m.round}/${m.maxRound} 回合 · ${m.phase} · 已进行 ${durStr}`);
-      const seatsStr = r.seats.map((s) => {
-        const botTag = s.isBot ? ' [AI]' : '';
-        const connTag = s.connected ? '' : ' [断线]';
-        const lpTag = s.lp != null ? ` (LP: ${s.lp})` : '';
-        return `P${s.seat + 1}: ${s.name}${botTag}${connTag}${lpTag}`;
-      }).join(' | ');
-      console.log(`      席位玩家 (${r.humans}真人/${r.bots}AI): ${seatsStr}`);
+      const seatsStr = r.seats.map((s) => formatSeat(s)).join(' | ');
+      console.log(`      席位玩家 (${r.connectedHumans ?? r.humans}在线/${r.humans}真人/${r.bots}AI): ${seatsStr}`);
       console.log('');
     });
   } else {
-    console.log(`⚔️  当前暂无正在进行的对局。\n`);
+    console.log(`⚔️  当前暂无正在实时游玩的活跃对局。\n`);
+  }
+
+  if (suspendedMatchRooms.length > 0) {
+    console.log(`💤 离线挂起中的对局 (${suspendedMatchRooms.length} 局 · 全员断线等待重连):`);
+    suspendedMatchRooms.forEach((r, idx) => {
+      const m = r.match;
+      const suspStr = r.suspendedSec != null ? `已挂起 ${formatDurCn(r.suspendedSec)}` : '全员断线';
+      const durStr = formatDurCn(m.durationSec || 0);
+      console.log(`  [${idx + 1}] 房间 ${r.code} · ${r.mode === 'solo' ? '独立模拟' : '多人联防'} (${r.mode} / ${r.difficulty}) [${suspStr}]`);
+      console.log(`      停留进度: 第 ${m.round}/${m.maxRound} 回合 · ${m.phase} · 开局至今 ${durStr}`);
+      const seatsStr = r.seats.map((s) => formatSeat(s, { showResumeLeft: true })).join(' | ');
+      console.log(`      席位玩家 (${r.humans}真人/${r.bots}AI): ${seatsStr}`);
+      console.log('');
+    });
   }
 
   if (waitingRooms.length > 0) {
@@ -440,7 +552,8 @@ async function showMatches(opts) {
       const seatsStr = r.seats.map((s) => {
         const readyTag = s.ready ? ' [已准备]' : ' [未准备]';
         const botTag = s.isBot ? ' [AI]' : '';
-        return `P${s.seat + 1}: ${s.name}${botTag}${readyTag}`;
+        const discDur = (!s.isBot && !s.connected && s.disconnectedSec != null) ? ` [断线 ${formatDurCompact(s.disconnectedSec)}]` : '';
+        return `P${s.seat + 1}: ${s.name}${botTag}${readyTag}${discDur}`;
       }).join(' | ');
       console.log(`  [${idx + 1}] 房间 ${r.code} · ${r.mode} / ${r.difficulty} (已等待 ${ageMin}分钟)`);
       console.log(`      席位: ${seatsStr || '暂无玩家'}`);

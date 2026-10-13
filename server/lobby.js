@@ -302,15 +302,47 @@ export class Lobby {
   /** Counters for /healthz. */
   stats() {
     let matches = 0;
+    let activeMatches = 0;
+    let suspendedMatches = 0;
     let humans = 0;
+    let humansConnected = 0;
+    let humansDisconnected = 0;
     let bots = 0;
     let spectators = 0;
     for (const r of this.rooms.values()) {
-      if (r.match) matches++;
-      for (const s of r.seats) if (s && !s.left) (s.isBot ? bots++ : humans++);
+      let roomConnectedHumans = 0;
+      for (const s of r.seats) {
+        if (!s || s.left) continue;
+        if (s.isBot) {
+          bots++;
+        } else {
+          humans++;
+          if (s.connected) {
+            humansConnected++;
+            roomConnectedHumans++;
+          } else {
+            humansDisconnected++;
+          }
+        }
+      }
+      if (r.match) {
+        matches++;
+        if (roomConnectedHumans > 0) activeMatches++;
+        else suspendedMatches++;
+      }
       spectators += r.spectators.length;
     }
-    return { rooms: this.rooms.size, matches, humans, bots, spectators };
+    return {
+      rooms: this.rooms.size,
+      matches,
+      activeMatches,
+      suspendedMatches,
+      humans,
+      humansConnected,
+      humansDisconnected,
+      bots,
+      spectators,
+    };
   }
 
   /** Anonymous breakdown counters for /healthz. */
@@ -320,6 +352,7 @@ export class Lobby {
     const byPhase = { WAITING: 0 };
     const byHumans = { 1: 0, 2: 0, 3: 0, 4: 0 };
     let matchesActive = 0;
+    let matchesSuspended = 0;
     let roomsWaiting = 0;
 
     for (const r of this.rooms.values()) {
@@ -329,13 +362,20 @@ export class Lobby {
       const diff = r.difficulty || 'NORMAL';
       byDifficulty[diff] = (byDifficulty[diff] || 0) + 1;
 
-      const humanCount = r.seats.filter((s) => s && !s.isBot && !s.left).length;
+      const humanSeats = r.seats.filter((s) => s && !s.isBot && !s.left);
+      const humanCount = humanSeats.length;
+      const connectedHumanCount = humanSeats.filter((s) => s.connected).length;
       if (humanCount >= 1 && humanCount <= 4) byHumans[humanCount] = (byHumans[humanCount] || 0) + 1;
 
       if (r.match) {
-        matchesActive++;
-        const phase = r.match.phase || 'UNKNOWN';
-        byPhase[phase] = (byPhase[phase] || 0) + 1;
+        if (connectedHumanCount > 0) {
+          matchesActive++;
+          const phase = r.match.phase || 'UNKNOWN';
+          byPhase[phase] = (byPhase[phase] || 0) + 1;
+        } else {
+          matchesSuspended++;
+          byPhase.SUSPENDED = (byPhase.SUSPENDED || 0) + 1;
+        }
       } else {
         roomsWaiting++;
         byPhase.WAITING++;
@@ -348,6 +388,7 @@ export class Lobby {
       byPhase,
       byHumans,
       matchesActive,
+      matchesSuspended,
       roomsWaiting,
     };
   }
@@ -358,13 +399,55 @@ export class Lobby {
     const rooms = [];
     for (const r of this.rooms.values()) {
       const match = r.match;
-      const humans = r.seats.filter((s) => s && !s.isBot && !s.left).length;
+      const humanSeats = r.seats.filter((s) => s && !s.isBot && !s.left);
+      const humans = humanSeats.length;
+      const connectedHumans = humanSeats.filter((s) => s.connected).length;
+      const disconnectedHumans = humans - connectedHumans;
       const bots = r.seats.filter((s) => s && s.isBot).length;
+      const seats = r.seats.map((s) => {
+        if (!s) return null;
+        const ps = match?.players?.get(s.playerId);
+        const sess = !s.isBot && this.registry?.byId ? this.registry.byId(s.playerId) : null;
+        const connected = !!s.connected && !s.left;
+        const disconnectedAt = (!s.isBot && !connected && !s.left && sess?.disconnectedAt != null)
+          ? sess.disconnectedAt
+          : null;
+        const disconnectedSec = disconnectedAt != null
+          ? Math.max(0, Math.round((now - disconnectedAt) / 1000))
+          : null;
+        const resumeLeftSec = (disconnectedAt != null && sess && this.registry?.windowOf)
+          ? Math.max(0, Math.round((this.registry.windowOf(sess) - (now - disconnectedAt)) / 1000))
+          : null;
+        return {
+          seat: s.seat,
+          name: s.name || (s.isBot ? 'AI 队友' : '博士'),
+          isBot: !!s.isBot,
+          left: !!s.left,
+          connected,
+          disconnectedAt,
+          disconnectedSec,
+          resumeLeftSec,
+          ready: !!s.ready,
+          alive: ps ? !!ps.alive : true,
+          lp: ps ? ps.lp : null,
+          funds: ps ? ps.funds : null,
+          autoplay: ps ? !!ps.autoplay : false,
+        };
+      }).filter(Boolean);
+
+      const suspended = Boolean(match && connectedHumans === 0);
+      const discSecs = seats
+        .filter((s) => !s.isBot && !s.left && !s.connected && s.disconnectedSec != null)
+        .map((s) => s.disconnectedSec);
+      const suspendedSec = suspended && discSecs.length > 0 ? Math.min(...discSecs) : null;
+
       const roomItem = {
         code: r.code,
         mode: r.mode,
         difficulty: r.difficulty || 'NORMAL',
         status: match ? 'IN_MATCH' : 'WAITING',
+        suspended,
+        suspendedSec,
         createdAt: r.createdAt,
         ageSec: Math.max(0, Math.round((now - r.createdAt) / 1000)),
         matchCount: r.matchCount,
@@ -376,32 +459,22 @@ export class Lobby {
           startedAt: match.startedAt ?? now,
           durationSec: Math.max(0, Math.round((now - (match.startedAt ?? now)) / 1000)),
         } : null,
-        seats: r.seats.map((s) => {
-          if (!s) return null;
-          const ps = match?.players?.get(s.playerId);
-          return {
-            seat: s.seat,
-            name: s.name || (s.isBot ? 'AI 队友' : '博士'),
-            isBot: !!s.isBot,
-            connected: !!s.connected && !s.left,
-            ready: !!s.ready,
-            alive: ps ? !!ps.alive : true,
-            lp: ps ? ps.lp : null,
-            funds: ps ? ps.funds : null,
-            autoplay: ps ? !!ps.autoplay : false,
-          };
-        }).filter(Boolean),
+        seats,
         humans,
+        connectedHumans,
+        disconnectedHumans,
         bots,
         spectators: r.spectators.length,
       };
       rooms.push(roomItem);
     }
 
-    // Sort: ongoing matches first, then by recency of match start or room creation
+    // Sort: active matches first, then suspended matches, then waiting rooms; within each group by recency
     rooms.sort((a, b) => {
-      if (a.status === 'IN_MATCH' && b.status !== 'IN_MATCH') return -1;
-      if (a.status !== 'IN_MATCH' && b.status === 'IN_MATCH') return 1;
+      const rank = (item) => (item.status === 'IN_MATCH' ? (item.suspended ? 1 : 0) : 2);
+      const rA = rank(a);
+      const rB = rank(b);
+      if (rA !== rB) return rA - rB;
       const tA = a.match ? a.match.startedAt : a.createdAt;
       const tB = b.match ? b.match.startedAt : b.createdAt;
       return tB - tA;

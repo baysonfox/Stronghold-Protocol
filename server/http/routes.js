@@ -66,6 +66,8 @@ export function createRequestHandler({ serveStatic, health, log }) {
         sendJson(req, res, 200, {
           ok: true,
           timestamp: Date.now(),
+          sockets: health.network?.connectionCount ?? 0,
+          sessions: health.registry?.size ?? 0,
           ...health.lobby.stats(),
           ...report,
         });

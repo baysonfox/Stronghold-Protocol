@@ -280,9 +280,40 @@ describe('maintenance announcement & cutoff', () => {
     const room = res.body.rooms.find((r) => r.mode === 'solo' && r.difficulty === 'HARD');
     assert.ok(room);
     assert.equal(room.status, 'IN_MATCH');
+    assert.equal(room.suspended, false);
+    assert.equal(room.connectedHumans, 1);
+    assert.equal(room.disconnectedHumans, 0);
     assert.ok(room.match);
     assert.equal(room.match.round, 1);
-    assert.ok(room.seats.some((s) => s.name === 'Captain'));
+    assert.ok(room.seats.some((s) => s.name === 'Captain' && s.connected === true));
+    assert.ok(typeof res.body.sockets === 'number' && res.body.sockets >= 1);
+    assert.equal(res.body.activeMatches >= 1, true);
+
+    // When the solo player disconnects, the match becomes suspended in both /healthz and /admin/matches
+    c.close();
+    await new Promise((r) => setTimeout(r, 80));
+
+    const afterDisc = await httpReq(srv.port, '/admin/matches');
+    assert.equal(afterDisc.status, 200);
+    const suspRoom = afterDisc.body.rooms.find((r) => r.code === room.code);
+    assert.ok(suspRoom);
+    assert.equal(suspRoom.status, 'IN_MATCH');
+    assert.equal(suspRoom.suspended, true);
+    assert.equal(suspRoom.connectedHumans, 0);
+    assert.equal(suspRoom.disconnectedHumans, 1);
+    assert.equal(typeof suspRoom.suspendedSec, 'number');
+    const capSeat = suspRoom.seats.find((s) => s.name === 'Captain');
+    assert.ok(capSeat);
+    assert.equal(capSeat.connected, false);
+    assert.equal(typeof capSeat.disconnectedSec, 'number');
+    assert.ok(capSeat.resumeLeftSec > 3600, 'solo reconnect window (~24h) reported in resumeLeftSec');
+
+    const healthDisc = await httpReq(srv.port, '/healthz');
+    assert.equal(healthDisc.status, 200);
+    assert.ok(healthDisc.body.suspendedMatches >= 1);
+    assert.ok(healthDisc.body.humansDisconnected >= 1);
+    assert.ok(healthDisc.body.breakdown.matchesSuspended >= 1);
+    assert.ok(healthDisc.body.breakdown.byPhase.SUSPENDED >= 1);
 
     // Verify token protection if ADMIN_TOKEN is set
     process.env.ADMIN_TOKEN = 'secret-guard';
