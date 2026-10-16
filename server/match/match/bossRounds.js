@@ -6,7 +6,8 @@
 // Installed on Match.prototype by server/match/Match.js (a method container: never instantiated; `this` is the match).
 
 import { PHASE, GEO } from '../../../shared/constants.js';
-import { deriveSeed } from '../../sim/rng.js';
+import { createRng, deriveSeed } from '../../sim/rng.js';
+import { creditedKillsOf } from '../../sim/spec.js';
 import { buildBossWave, bountySpawns } from '../waves.js';
 import { pairPlayers, bossPoolHp, SharedBossPool, CreditPool, hiddenEligible, BOSS_HIT_STEPS } from '../finalAssault.js';
 import { FieldRunner, HeadlessPacer, syntheticResult, BOSS_SILENCE_MS, CATCHUP_TICKS_PER_INTERVAL } from '../fields.js';
@@ -66,7 +67,8 @@ export class MatchBoss {
       },
     });
     this.bossPool = pool;
-    const groups = pairPlayers(alive);
+    const groups = pairPlayers(alive, createRng(deriveSeed(this.seed, 'boss-pairs')), this.bossPairs);
+    this.bossPairs = groups.map(g => g.map(p => p.playerId));
     const reuse = this.bossWaves && this.bossWaves.length === groups.length && this.bossWaves.every((w, i) => w.players.join() === groups[i].map((p) => p.playerId).join());
     this.fields = groups.map((g, i) => {
       const solo = this.isSolo || g.length === 1;
@@ -120,8 +122,13 @@ export class MatchBoss {
     // overtime drain starts (150 real s), both on the field clock
     const onClock = (realS) => this.sched.now() + Math.round(((realS * this.gd.combatTimeScale) / this.gameSpeed) * 1000);
     const levelTime = this.gd.bossLevelTime(this.round);
+    // Maintainer 2026-10-10: only teams with an AI teammate keep the extra grace after the visible countdown.
+    // Freeze this choice for the fight; a disconnect / host transfer cannot change its LP clock midway.
+    const team = this.order.filter((p) => !p.left);
+    this.bossOvertimeStartReal = team.length > 1 && team.some((p) => p.isBot)
+      ? this.gd.bossOvertimeAfterReal : (levelTime || this.gd.bossOvertimeAfterReal);
     this.deadline = this.sched.instant || !levelTime ? 0 : onClock(levelTime);
-    this.overtimeAt = this.sched.instant ? 0 : onClock(this.gd.bossOvertimeAfterReal);
+    this.overtimeAt = this.sched.instant ? 0 : onClock(this.bossOvertimeStartReal);
     if (this.clientCombat) { this._startFinalClient(hidden); return; }
     this._defaultWatch();
     this.markPublic();
@@ -480,7 +487,7 @@ export class MatchBoss {
    * (bossTurnHpReduceTime, gamedata.js bossOvertimeDue).
    */
   _applyOvertime(gt) {
-    const due = this.gd.bossOvertimeDue(gt);
+    const due = this.gd.bossOvertimeDue(gt, this.bossOvertimeStartReal);
     if (due > this.overtimeApplied) {
       const loss = due - this.overtimeApplied;
       this.overtimeApplied = due;
@@ -518,6 +525,7 @@ export class MatchBoss {
         if (pp && ps) {
           ps.stats.dmgDealt += Number(pp.damageDealt) || 0;
           ps.stats.kills += Number(pp.killed) || 0;
+          ps.creditedKills += creditedKillsOf(pp);
           ps.dirty(); // m.private.stats
           this._charDamageTickers(ps, pp);
         }

@@ -3,7 +3,8 @@
 // (test/match/harness.js checkInvariants asserts the list is empty) and by tools/matchrun.mjs --check sweeps.
 //
 // collectViolations(m) → string[] (empty when every invariant holds):
-//   pool     0 ≤ left ≤ cap and left + Σ copies held by pieces == cap per base chess; non-pool chess hold 0 copies;
+//   pool     raw balance ≤ cap and raw balance + Σ copies held by pieces == cap (public availability is clamped at zero) per base chess; non-pool chess hold 0 copies;
+//            every capped shop item is held by at most its cap (normal occupies 1, upgraded 2; effect-only items have no cap)
 //            a player's 自选 stock (0.2.0, player/diy.js) the same against its own pieces of each slotted slot — a DIY
 //            piece is always a slotted slot of its owner's, and a DIY shop / reward card one of its stocked slots
 //   economy  funds / pendingFunds non-negative integers, LP finite, shop level in range, prices ≥ 0
@@ -60,7 +61,8 @@ export function collectViolations(m, { limit = 25 } = {}) {
     if (!Number.isFinite(ps.lp)) fail(`${id}: lp ${ps.lp}`);
     if (ps.alive && m.phase !== PHASE.SETTLE && ps.lp <= 0 && m.teamLp == null && m.round > 0 && ps.bandId) fail(`${id}: alive with lp ${ps.lp}`);
     if (ps.hand.length !== gd.benchSize) fail(`${id}: hand has ${ps.hand.length} slots`);
-    if (ps.temp.length !== gd.tempSize) fail(`${id}: temp has ${ps.temp.length} slots`);
+    if (ps.temp.length < gd.tempSize) fail(`${id}: temp has fewer than ${gd.tempSize} visible slots`);
+    if (ps.temp.length > gd.tempSize && ps.temp.some((x) => x == null)) fail(`${id}: overflow queue has an unfilled slot`);
     // 临时整备区 = overflow only (PRTS 卫戍协议/帮助 §手牌区 "常规手牌区出现空位时自动移入", GitHub #82)
     if (ps.temp.some(Boolean) && ps.hand.some((x) => x == null)) fail(`${id}: a temp piece waits while a hand slot is free`);
     if (!(ps.shop.level >= 1 && ps.shop.level <= gd.maxShopLevel)) fail(`${id}: shop level ${ps.shop.level}`);
@@ -186,7 +188,7 @@ export function collectViolations(m, { limit = 25 } = {}) {
     }
     // 自选 stock accounting (player/diy.js): left + held == cap per slotted slot; a slot without stock holds nothing
     for (const [base, e] of ps.diyStock ? ps.diyStock.entries : []) {
-      if (!(e.left >= 0 && e.left <= e.cap)) fail(`${id}: 自选 stock ${base}: left ${e.left} cap ${e.cap}`);
+      if (!(Number.isInteger(e.left) && e.left <= e.cap)) fail(`${id}: 自选 stock ${base}: balance ${e.left} cap ${e.cap}`);
       const h = diyHeld.get(base) || 0;
       if (e.left + h !== e.cap) fail(`${id}: 自选 stock ${base}: left ${e.left} + held ${h} != cap ${e.cap}`);
     }
@@ -195,11 +197,27 @@ export function collectViolations(m, { limit = 25 } = {}) {
 
   // shared pool accounting
   for (const [base, e] of m.pool.entries) {
-    if (!(e.left >= 0 && e.left <= e.cap)) fail(`pool ${base}: left ${e.left} cap ${e.cap}`);
+    if (!(Number.isInteger(e.left) && e.left <= e.cap)) fail(`pool ${base}: balance ${e.left} cap ${e.cap}`);
     const h = held.get(base) || 0;
     if (e.left + h !== e.cap) fail(`pool ${base}: left ${e.left} + held ${h} != cap ${e.cap}`);
   }
   for (const [base, n] of held) if (!m.pool.has(base) && n !== 0) fail(`non-pool chess ${base} holds ${n} copies`);
+
+  // Displayed shop cards and item rewards may overdraw; itemPool.debt is that overage (#624). Fixed gift families
+  // may overdraw without a debt entry. debt > over is always a missed repay or a debt recorded for a piece not kept.
+  // The chess pool above also permits explicit overdraw (Mimic, displayed operator cards).
+  if (m.itemPool && gd.raw.items) {
+    for (const [id, rec] of Object.entries(gd.raw.items)) {
+      if (!rec || rec.isGolden) continue;
+      const cap = m.itemPool.cap(id);
+      if (!Number.isInteger(cap)) continue;
+      const h = m.itemPool.held(id);
+      const over = Math.max(0, h - cap);
+      const debt = m.itemPool.debtOf(id);
+      if (debt > over) fail(`item ${id}: debt ${debt} > overage ${over} (held ${h}, cap ${cap})`);
+      if (!gd.isUnlimitedGiftItem(id) && over > debt) fail(`item ${id}: held ${h} > cap ${cap} without debt ${debt}`);
+    }
+  }
 
   // combat fields
   if (m.phase === PHASE.COMBAT) {
