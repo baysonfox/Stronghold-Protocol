@@ -154,11 +154,11 @@ export class PlayerRound {
         // 干员调配 settings, 潜能 6 / 精英2 Lv.60 by default and for bots; never a stand-in's nor a prototype pick's)
         const cv = u.standIn ? null : this.cultivationFor(this.gd.chess(piece.id));
         if (cv) { u.potential = cv.potential; u.cultivate = cv.cultivate; }
-        // 干员皮肤 (docs/SKINS.md): keyed by the base chess id (a golden/promoted piece keeps its skin), a DIY slot
-        // wears the skin of its picked operator
-        const skinBase = pick ? pick.charId : ((this.gd.chess(piece.id) || {}).baseId || piece.id);
-        const skin = this.skins[skinBase] || this.skins[piece.id];
-        if (skin) u.skin = skin;
+        // 皮肤 (docs/SKINS.md): the appearance this player wears for the operator the piece fields, carried into the sim
+        // so it reaches Unit.skin and the snapshot every client draws from. A 自选 slot's own record has no charId (its
+        // appearance is the PICK's operator), so the pick's operator decides the key first.
+        const skinId = this.skinFor(this.gd.chess(piece.id), pick ? pick.charId : null);
+        if (skinId) u.skin = skinId;
         if (carry && carry.has(piece.uid)) u.carryState = carry.get(piece.uid);
         units.push(u);
       } else if (piece.kind === 'token') {

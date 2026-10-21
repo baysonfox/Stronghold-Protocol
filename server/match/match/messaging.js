@@ -58,10 +58,10 @@ export class MatchMessaging {
    */
   markPrivate(ps) {
     if (!ps) return;
-    this._privDirty.add(ps);
+    if (this._privDirty) this._privDirty.add(ps);
     this._pubDirty = true;
-    const m = this._bossMateOf(ps);
-    if (m) this._privDirty.add(m.mate);
+    const m = typeof this._bossMateOf === 'function' ? this._bossMateOf(ps) : null;
+    if (m && this._privDirty) this._privDirty.add(m.mate);
   }
 
   /** Send pending m.private (per player, only when changed) and m.public (throttled ≤ 10/s). */

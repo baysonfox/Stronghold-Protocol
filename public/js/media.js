@@ -42,6 +42,14 @@ const PLUGIN_AUDIO = /^\/p\/[a-z0-9][a-z0-9-]{1,31}\/[0-9a-f]{8}\/(.+)$/;
  */
 export function mediaUrl(url, origin = globalThis.location?.origin) {
   if (typeof url !== 'string' || !url) return url;
+  // 皮肤语音的目录名带 `#`（例如 `char_472_pasngr_epoque#17`），而在 URL 中 `#` 会被视作
+  // 片段标识符 —— 先将路径中的 `#` 转义为 %23，避免请求路径被截断导致 404
+  if (url.includes('#')) {
+    const q = url.indexOf('?');
+    const head = q >= 0 ? url.slice(0, q) : url;
+    const tail = q >= 0 ? url.slice(q) : '';
+    url = head.replace(/#/g, '%23') + tail;
+  }
   let u;
   // No origin known (Node / tests): parse relative URLs against a placeholder, absolute ones are rejected below.
   try { u = new URL(url, origin || 'http://localhost'); } catch { return url; }

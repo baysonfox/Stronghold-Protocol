@@ -5,6 +5,7 @@
 // Installed on Match.prototype by server/match/Match.js (a method container: never instantiated; `this` is the match).
 
 import { PHASE, GEO } from '../../../shared/constants.js';
+import { TEST_PUBLIC_LOG } from '../../../shared/testMode.js';
 import { boardOrder, pieceDir } from '../board.js';
 import { bondList, offBondCounts } from '../bondsMeta.js';
 import { cardView } from '../choices.js';
@@ -12,6 +13,14 @@ import { bountySpawns, previewOf } from '../waves.js';
 import { timelineAt } from '../fields.js';
 import { bossFieldPlacement } from '../finalAssault.js';
 import { battleProgress } from '../../sim/spec.js';
+
+/** Milliseconds since the match started. A stamp before the start, or a bad stamp, is 0. The stored log keeps the epoch. */
+function auditClock(at, startedAt) {
+  const stamp = Number(at);
+  const start = Number(startedAt);
+  if (!Number.isFinite(stamp) || !Number.isFinite(start)) return 0;
+  return Math.max(0, stamp - start);
+}
 
 /** A reported capsule numerator clamped to its denominator, else null (unknown — never a fabricated 0). */
 const finiteOrNull = (v, cap = Infinity) => {
@@ -114,8 +123,9 @@ export class MatchViews {
         fieldId: this.fieldOf(ps),
         status: this.statusOf(ps),
         autoplay: ps.autoplay,
-        // 干员皮肤 (docs/SKINS.md): PUBLIC — a teammate's renderer picks a piece's model from it; omitted when empty,
-        // so the frame is byte-identical for a player with no skins
+        // 干员皮肤 (docs/SKINS.md): PUBLIC on purpose — this is how a teammate sees your skin, and the reason the
+        // renderer reads the skin off the unit rather than off the local player. Omitted when empty, which is the normal
+        // case: the appearance comes from a cosmetic plugin each player switches on for themself, so most have none.
         ...(Object.keys(ps.skins).length ? { skins: ps.skins } : {}),
         // the LP this round's own battle will cost at settlement so far (COMBAT / 联防 only, omitted when 0)
         ...this._pendingLpView(ps),
@@ -127,6 +137,7 @@ export class MatchViews {
         return v;
       }),
     };
+    if (this.offers.length) v.offers = this.offerViews();
     if (this.teamLp != null) v.teamLp = Math.max(0, Math.round(this.teamLp));
     // 最终攻势 / 隐秘核心: when the overtime drain starts (ms epoch; `deadline` is the level's 120 s countdown)
     if ((this.phase === PHASE.FINAL_ASSAULT || this.phase === PHASE.HIDDEN_CORE) && this.overtimeAt) v.overtimeAt = this.overtimeAt;
@@ -154,6 +165,21 @@ export class MatchViews {
     if (this.phase === PHASE.SETTLE && this.uniteResultView) {
       const ur = this.uniteResultView;
       v.uniteResult = { through: ur.through, helpers: ur.helpers.slice(), leakers: ur.leakers.slice(), losses: { ...ur.losses } };
+    }
+    // Test match (DESIGN §34.8). Omitted entirely when the flag is off, so a normal m.public stays identical.
+    if (this.test === true) {
+      v.test = true;
+      v.testActions = this.testActions | 0;
+      v.testTimers = this.testTimers !== false;
+      const log = Array.isArray(this.testLog) ? this.testLog : [];
+      v.testLog = log.slice(-TEST_PUBLIC_LOG).map((e) => ({
+        seq: e.seq, playerId: e.playerId, cmd: e.cmd, args: e.args,
+        // The stored row keeps the scheduler epoch. The dock clock is time since this match started.
+        at: auditClock(e.at, this.startedAt),
+        ok: e.ok === true,
+        ...(e.code ? { code: e.code } : {}),
+        ...(e.detail ? { detail: e.detail } : {}),
+      }));
     }
     return v;
   }
@@ -288,9 +314,6 @@ export class MatchViews {
         area: 'board',
         name: rec ? rec.name : piece.id, tier: rec && Number.isInteger(rec.tier) ? rec.tier : 1, golden: !!(rec && rec.isGolden),
         spine: assets.spine || (rec && rec.charId) || piece.id, avatar: assets.avatar || (rec && rec.charId) || piece.id,
-        // 干员皮肤 (docs/SKINS.md): keyed by the base chess id / the DIY pick's operator — the board and the bench render
-        // a piece's skin (the prep scout's detail card and the own prep board alike)
-        skin: piece.kind === 'chess' ? (ps.skins?.[chess && chess.baseId] || ps.skins?.[piece.id] || ps.skins?.[diy?.charId]) : undefined,
         x: c, y: r, dir: pieceDir(piece), facing: pieceDir(piece) === 'LEFT' ? -1 : 1, maxHp: rec && rec.stats && Number.isFinite(rec.stats.maxHp) ? rec.stats.maxHp : 1,
         skillIndex: lo && Number.isInteger(lo.skillIndex) ? lo.skillIndex : undefined,
         moduleId: lo && typeof lo.moduleId === 'string' ? lo.moduleId : undefined,
@@ -298,6 +321,9 @@ export class MatchViews {
         items: piece.kind === 'chess' && Array.isArray(piece.items) && piece.items.length ? piece.items.map((it) => it.id) : undefined,
         standInFor: rec && rec.standInFor ? rec.standInFor : undefined,
         diy,
+        // 皮肤 (docs/SKINS.md): built per player (the owner of the scouted board), so a teammate's piece shows THEIR
+        // appearance; a 自选 slot fights as its pick's operator, which is the key it wears too
+        skin: ps.skinFor(rec, diy ? diy.charId : null) || undefined,
         ...cultivationInfo(lo),
       });
     }
@@ -357,14 +383,14 @@ export class MatchViews {
         side: 'ally', ownerId: ps.playerId, defId: piece.id, area,
         name: body ? body.name : piece.id, tier: rec && Number.isInteger(rec.tier) ? rec.tier : 1, golden: !!(rec && rec.isGolden),
         spine: assets.spine || (body && body.charId) || piece.id, avatar: assets.avatar || (body && body.charId) || piece.id,
-        // 干员皮肤 (docs/SKINS.md): the bench renders a piece's skin too (a stand-in keeps the stand-in's model)
-        skin: piece.kind === 'chess' && !standIn ? (ps.skins?.[rec && rec.baseId] || ps.skins?.[piece.id] || ps.skins?.[diy?.charId]) : undefined,
         x: i, y, maxHp: body && body.stats && Number.isFinite(body.stats.maxHp) ? body.stats.maxHp : 1,
         skillIndex: lo && Number.isInteger(lo.skillIndex) ? lo.skillIndex : undefined,
         moduleId: lo && typeof lo.moduleId === 'string' ? lo.moduleId : undefined,
         items: piece.kind === 'chess' && Array.isArray(piece.items) && piece.items.length ? piece.items.map((it) => it.id) : undefined,
         standInFor: standIn && standIn.standInFor ? standIn.standInFor : undefined,
         diy,
+        // 皮肤 (docs/SKINS.md): the scouted player's own appearance (see the prep view above)
+        skin: ps.skinFor(rec, diy ? diy.charId : null) || undefined,
         ...cultivationInfo(lo),
       });
     };
