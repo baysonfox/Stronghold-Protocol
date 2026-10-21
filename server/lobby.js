@@ -1662,12 +1662,12 @@ export class Lobby {
    */
   welcomeInfo() {
     let info;
-    const notice = this.maintenanceStatus();
-    if (!this.vanilla) info = { diyKitted: KITTED_CHARS, notice };
+    const notice = typeof this.maintenanceStatus === 'function' ? this.maintenanceStatus() : null;
+    if (!this.vanilla) info = { diyKitted: KITTED_CHARS, ...(notice ? { notice } : {}) };
     else {
       let n;
       try { n = Number(this.plugins?.unofficial?.()) || 0; } catch { n = 0; }
-      info = { diyKitted: KITTED_CHARS, content: n > 0 ? { vanilla: this.vanilla.cs, plugins: n } : { vanilla: this.vanilla.cs }, notice };
+      info = { diyKitted: KITTED_CHARS, content: n > 0 ? { vanilla: this.vanilla.cs, plugins: n } : { vanilla: this.vanilla.cs }, ...(notice ? { notice } : {}) };
       // Catalogue metadata, never part of a room or match; omitted when no loaded plugin publishes a notice.
       if (this.plugins?.hasNotices?.()) info.content.notices = true;
     }

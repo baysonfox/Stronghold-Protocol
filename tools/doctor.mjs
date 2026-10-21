@@ -199,7 +199,10 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const [k, v] = argv[i].split('=');
     const val = () => (v !== undefined ? v : argv[++i]);
-    if (k === '--port') o.port = Number(val()) || o.port;
+    if (k === '--port') {
+      const p = Number(val());
+      o.port = Number.isInteger(p) ? p : o.port;
+    }
     else if (k === '--host') o.host = val() || o.host;
     else if (k === '-h' || k === '--help') o.help = true;
     else throw new Error(`unknown option ${argv[i]}`);
