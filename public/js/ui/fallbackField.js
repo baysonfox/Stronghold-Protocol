@@ -19,25 +19,39 @@
 // A tap on the ground itself emits tileClick { row, col } like render/app.js does, so a special terrain tile
 // explains itself on this board too (GitHub issue #184).
 
+import { resourceFloat } from '../render/resourceNumbers.js';
+import { pieceItemProgress, progressLabel } from '../itemProgress.js';
 import { render } from '../../vendor/preact.module.js';
 import { html, TierChip } from './components.js';
 import { GEO } from '../../../shared/constants.js';
 import { chessAvatarUrl, itemIconUrl, tokenAvatarUrl, enemyIconUrl } from './assetUrls.js';
 import { tileKey, hasFlag, UF, penPlacement, PEN, fieldTile, ownStandIn, ownDiyRecord } from './gameLogic.js';
 import { t } from '../../../shared/i18n.js';
+import { ownerSkin } from './skins.js';
 
 const DRAG_PX = 6;
 const DMG_TTL = 900;
 const cx = (...p) => p.flat().filter(Boolean).join(' ');
 
 /** Avatar URL for a UnitInfo `avatar` asset id (chars / E2 / tokens / enemies). */
-function unitArt(m, info) {
+export function unitArt(m, info, appearance = {}) {
   const id = info?.avatar || info?.defId;
   if (!m || !id) return null;
   if (info.side === 'enemy' || String(id).startsWith('enemy_')) return enemyIconUrl(m, id);
-  if (String(id).startsWith('token_')) return tokenAvatarUrl(m, id);
+  if (String(id).startsWith('token_')) {
+    // 召唤物皮肤 (docs/SKINS.md): the same switch as an operator's: another seat's outfit is hidden when off. With its
+    // owner's operator known (UnitInfo ownerCharId, #876) the summon follows that operator's CURRENT outfit like the Pixi
+    // board does — the spawn-time info.skin missed a change made during the battle (round-54 audit)
+    const mine = info.ownerId == null || info.ownerId === appearance.myId;
+    const skin = info.ownerCharId && info.ownerId != null
+      ? ownerSkin(info.ownerCharId, { ...appearance, ownerId: info.ownerId, skin: info.skin })
+      : (mine || appearance.otherSkins !== false ? info.skin : null);
+    return tokenAvatarUrl(m, id, { skin });
+  }
   // Same golden rule as chessAvatarUrl: a character-key avatar uses avatarE2 on a golden piece.
-  return chessAvatarUrl(m, { isGolden: !!info.golden, assets: { avatar: id } });
+  const charId = info.diy?.charId || info.spine || String(id).replace(/_[12]$/, '');
+  const skin = ownerSkin(charId, { ...appearance, ownerId: info.ownerId ?? null, skin: info.skin });
+  return chessAvatarUrl(m, { charId, isGolden: !!info.golden, assets: { avatar: id } }, { skin });
 }
 
 /** Look of the stage tile (row, col) on the fallback board (stage coordinates). */
@@ -68,6 +82,7 @@ export function fallbackTileClass(stage, row, col) {
  */
 export function fallbackFloat(e, settings) {
   if (!settings?.damageNumbers || !Array.isArray(e)) return null;
+  if (e[0] === 'resource') return resourceFloat(e, settings);
   if (settings.officialDamageNumbers === true) {
     if (e[0] === 'fx' && e[1] === 'dodge' && e[4] && e[4].num === 'm') return { id: e[4].id, text: 'MISS', type: 'miss' };
     if (e[0] !== 'dmg' || e[4] !== 'r') return null;
@@ -101,7 +116,7 @@ export function createFallbackView(host, opts = {}) {
     mode: 'prep', priv: null, editable: false, canPlace: null,
     field: null, units: new Map(), snapUnits: new Map(), highlight: new Map(), hlGroups: new Map(), held: new Map(), dirs: new Map(),
     drag: null, hoverTarget: null, floats: [], settings: { damageNumbers: true, officialDamageNumbers: false, ...(opts.settings || {}) },
-    size: { w: 0, h: 0 }, destroyed: false, pen: [],
+    size: { w: 0, h: 0 }, destroyed: false, pen: [], myId: null, players: [],
   };
 
   const emit = (type, payload) => {
@@ -147,9 +162,17 @@ export function createFallbackView(host, opts = {}) {
   function pieceArt(p) {
     const mm = m();
     if (p.kind === 'item') return itemIconUrl(mm, lookup('items', p.id));
-    if (p.kind === 'token') return tokenAvatarUrl(mm, p.id);
+    // 召唤物皮肤 (docs/SKINS.md): the summon wears its owner's outfit; 设置「显示其他玩家的皮肤」 off hides another
+    // seat's outfit
+    if (p.kind === 'token') {
+      const own = (st.priv?.playerId ?? st.myId) === st.myId || st.settings?.otherSkins !== false;
+      return tokenAvatarUrl(mm, p.id, { skin: own ? p.skin : null });
+    }
     const chess = lookup('chess', p.id);
-    return chessAvatarUrl(mm, ownSi(chess) || ownDiy(chess) || chess);
+    const body = ownSi(chess) || ownDiy(chess) || chess;
+    const skin = ownerSkin(body?.charId, { ownerId: st.priv?.playerId ?? st.myId, skin: p.skin,
+      myId: st.myId, players: st.players, otherSkins: st.settings.otherSkins });
+    return chessAvatarUrl(mm, body, { skin });
   }
   /** 0.2.0 补位: the player's own piece of a chess it does not own is its stand-in, bench and board alike (render/app.js pieceInfo) */
   function ownSi(chess) {
@@ -182,8 +205,14 @@ export function createFallbackView(host, opts = {}) {
       ${tier && p.kind !== 'token' ? html`<${TierChip} tier=${tier} golden=${golden} size="sm" class="ff-piece__tier" />` : null}
       ${p.kind === 'chess' && Array.isArray(p.items) && p.items.length ? html`<div class="ff-piece__items">${p.items.slice(0, 2).map((it) => html`<i key=${it.uid}></i>`)}</div>` : null}
       ${p.kind === 'token' && p.count > 1 ? html`<b class="ff-piece__count">×${p.count}</b>` : null}
+      <${EquipmentProgress} rows=${pieceItemProgress(p)} />
       ${wedge ? html`<i class="ff-piece__dir" aria-hidden="true"></i>` : null}
     </div>`;
+  }
+
+  function EquipmentProgress({ rows }) {
+    const labels = (rows || []).map(progressLabel).filter(Boolean);
+    return labels.length ? html`<span class="ff-progress">${labels.map((label, i) => html`<span key=${i}>${label}</span>`)}</span>` : null;
   }
 
   function onDown(e, p) {
@@ -272,7 +301,7 @@ export function createFallbackView(host, opts = {}) {
     const py = (st.rect.r1 - y + 0.5) * L.tile;
     const enemy = info.side === 'enemy';
     const size = info.boss ? L.tile * 1.3 : L.tile * 0.86;
-    const src = unitArt(m(), info);
+    const src = unitArt(m(), info, { myId: st.myId, players: st.players, otherSkins: st.settings.otherSkins });
     const dead = anim === 4;
     const hpPct = maxHp > 0 ? Math.max(0, Math.min(100, (hp / maxHp) * 100)) : 0;
     const spPct = spMax > 0 ? Math.max(0, Math.min(100, (sp / spMax) * 100)) : 0;
@@ -283,6 +312,7 @@ export function createFallbackView(host, opts = {}) {
         onContextMenu=${(e) => { e.preventDefault(); emit('pieceClick', { unitId: id, uid: info.uid ?? null, unit: info, button: 2, clientX: e.clientX, clientY: e.clientY }); }}>
       <div class="ff-unit__art">${src ? html`<img src=${src} alt="" draggable=${false} />` : html`<span>${[...(info.name || '?')][0]}</span>`}</div>
       <div class="ff-unit__bars"><i class="hp" style=${`width:${hpPct}%`}></i>${!enemy && spMax > 0 ? html`<i class="sp" style=${`width:${spPct}%`}></i>` : null}</div>
+      ${!dead ? html`<${EquipmentProgress} rows=${info.itemProgress} />` : null}
     </div>`;
   }
 
@@ -510,6 +540,8 @@ export function createFallbackView(host, opts = {}) {
       schedule();
     },
     setSettings(s) { st.settings = { ...st.settings, ...(s || {}) }; schedule(); },
+    setMe(id) { st.myId = id; schedule(); },
+    setSkins(players) { st.players = players || []; schedule(); },
     on(type, fn) {
       if (typeof fn !== 'function') return () => {};
       if (!listeners.has(type)) listeners.set(type, new Set());
